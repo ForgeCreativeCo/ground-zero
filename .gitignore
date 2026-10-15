@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+assets-src/mixamo/
+assets-src/audio/*
+!assets-src/audio/.gitkeep
+*.log

@@ -1,0 +1,39 @@
+{
+  "name": "ground-zero",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "playwright test tests/e2e/smoke.spec.ts tests/e2e/destruction.spec.ts",
+    "perf": "playwright test tests/e2e/perf.spec.ts",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run smoke && npm run perf"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "three": "^0.186.1",
+    "tweakpane": "^4.0.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@tweakpane/core": "^2.0.5",
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  }
+}

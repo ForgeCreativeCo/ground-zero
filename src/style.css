@@ -1,0 +1,203 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #e8e8e8;
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+}
+
+#app,
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
+
+#boot-status {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #aaa;
+}
+
+#boot-status.error {
+  color: #ff6b5a;
+  letter-spacing: normal;
+  text-transform: none;
+  padding: 24px;
+}
+
+#hint {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#perf-hud {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  pointer-events: none;
+  font:
+    11px/1.35 ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+  color: #e6f2e8;
+  text-shadow: 0 1px 1px #000;
+}
+
+#perf-hud canvas {
+  display: block;
+  border-radius: 3px;
+}
+
+#perf-hud pre {
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+}
+
+#debug-panel {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  width: 320px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+}
+
+#speedometer {
+  position: fixed;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
+  width: min(320px, calc(100% - 32px));
+  pointer-events: none;
+  font:
+    12px/1.2 ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+  color: #f1ece4;
+  text-shadow: 0 1px 2px #000;
+}
+
+#speedometer .sm-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+#speedometer .sm-state {
+  letter-spacing: 0.12em;
+  color: #c9c2b6;
+}
+
+#speedometer .sm-track {
+  position: relative;
+  height: 5px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+#speedometer .sm-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: #e8e2d6;
+  border-radius: 3px;
+}
+
+#speedometer.sonic .sm-fill {
+  background: #f2a33a;
+}
+
+#speedometer .sm-marker {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 13px;
+  margin-left: -1px;
+  background: #f2a33a;
+}
+
+#hud {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  font:
+    12px/1.2 ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+  color: #f1ece4;
+  text-shadow: 0 1px 2px #000;
+}
+
+#hud .hud-bill {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+#hud .hud-bill-label {
+  letter-spacing: 0.14em;
+  color: #c9c2b6;
+  font-size: 11px;
+}
+
+#hud .hud-bill-value {
+  font-size: 16px;
+  color: #f2a33a;
+}
+
+#reticle {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+#reticle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 2px;
+  margin: -1px 0 0 -1px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+#reticle.reach {
+  border-color: #f2a33a;
+}
