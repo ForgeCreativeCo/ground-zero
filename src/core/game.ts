@@ -3,8 +3,12 @@ import { Synth } from '../audio/synth';
 import { config, getSeed, loadOverrides } from '../config';
 import { DestructionSystem } from '../destruction/destruction';
 import { Effects } from '../fx/effects';
+import { FireSystem } from '../fx/fire';
+import { InteriorSystem } from '../interiors/interiorSystem';
 import { Strength } from '../powers/strength';
 import { Environment } from '../render/environment';
+import { updateInteriorUniforms } from '../render/interiorMapping';
+import { ShaderWarmup } from '../render/shaderWarmup';
 import { GameRenderer } from '../render/renderer';
 import { Physics } from '../physics/physics';
 import { TestBodies } from '../physics/testBodies';
@@ -54,6 +58,8 @@ export class Game {
   destruction!: DestructionSystem;
   strength!: Strength;
   hud!: Hud;
+  interiors!: InteriorSystem;
+  fire!: FireSystem;
   perfHud!: PerfHud;
   speedometer!: Speedometer;
   debugPanel!: DebugPanel;
@@ -134,6 +140,8 @@ export class Game {
       this.slamAt(x, y, z, sp, dive),
     );
     this.wireDestructionEvents();
+    this.interiors = new InteriorSystem(this.scene, this.destruction, this.seed);
+    this.fire = new FireSystem(this.scene, this.destruction, this.interiors);
     console.log('[boot] destruction', (performance.now() - tD).toFixed(0), 'ms');
     this.hud = new Hud(this.root);
     this.perfHud = new PerfHud(this.root);
@@ -145,45 +153,50 @@ export class Game {
       teleport: (x, y, z) => this.teleport(x, y, z),
       toggleFullscreen: () => void toggleFullscreen(),
       cutStory: () => this.cutStoryUnderReticle(),
+      startFire: () => this.fireUnderReticle(),
+      toggleNight: () => {
+        config.sun.elevationDeg = config.sun.elevationDeg > 0 ? -12 : 38;
+      },
     });
     this.snapshot.backend = this.renderer.backendName;
     this.snapshot.seed = this.seed;
     this.resetPlayer();
-    // Compile every material now (effects included) so nothing hitches on first use mid-flight.
-    // compileAsync alone targets the canvas, but the game draws through the post-processing
-    // render target, so also render real frames with every effect visible.
-    this.effects.setPrewarm(true);
-    const warm = this.destruction.prewarmMeshes(this.renderer.camera);
-    this.destruction.renderer.proxies.setPrewarm(true);
-    this.destruction.renderer.setPrewarm(true);
-    this.destruction.debris.setPrewarm(true);
-    // Draw everything once regardless of where the camera looks, so nothing compiles or
-    // allocates on first sight later.
-    const culled: THREE.Object3D[] = [];
-    this.scene.traverse((o) => {
-      if (o.frustumCulled) {
-        culled.push(o);
-        o.frustumCulled = false;
-      }
-    });
-    this.scene.add(warm);
+    // Compile only what is on screen now, so the game starts quickly. Everything that shows up
+    // later (debris, falling sections, furniture, fire...) warms up in the background.
     const tC = performance.now();
-    await this.renderer.renderer.compileAsync(this.scene, this.renderer.camera);
-    console.log('[boot] compile', (performance.now() - tC).toFixed(0), 'ms');
-    const tR = performance.now();
-    for (let i = 0; i < 2; i++) {
-      this.renderer.update();
-      this.renderer.render();
-    }
-    console.log('[boot] prewarm frames', (performance.now() - tR).toFixed(0), 'ms');
-    this.scene.remove(warm);
-    for (const o of culled) o.frustumCulled = true;
-    this.destruction.renderer.proxies.setPrewarm(false);
-    this.destruction.renderer.setPrewarm(false);
-    this.destruction.debris.setPrewarm(false);
-    this.effects.setPrewarm(false);
+    await this.renderer.compileForScenePass(this.scene);
+    console.log(
+      '[boot] compile',
+      (performance.now() - tC).toFixed(0),
+      'ms',
+      'programs',
+      this.renderer.renderer.info.memory.programs,
+      'materials',
+      countMaterials(this.scene),
+    );
     events.emit('city:reset', { seed: this.seed });
     this.renderer.setAnimationLoop(this.tick);
+    void this.warmUp();
+  }
+
+  /** True once every shader that can appear later has been compiled. */
+  warm = false;
+
+  /** Background shader warm-up (see render/shaderWarmup.ts). */
+  private async warmUp() {
+    const t0 = performance.now();
+    const w = new ShaderWarmup(this.scene, this.destruction.structure.pool.allMeshes());
+    await w.run(this.renderer.camera, (root, cam) => this.renderer.compileForScenePass(root, cam));
+    // Pieces revealed during warm-up keep their counts; re-sync the batches anyway.
+    this.destruction.renderer.markAllDirty();
+    this.warm = true;
+    console.log(
+      '[boot] background warm-up',
+      (performance.now() - t0).toFixed(0),
+      'ms',
+      w.size,
+      'meshes',
+    );
   }
 
   resetPlayer() {
@@ -315,9 +328,12 @@ export class Game {
     this.speedometer.update(speed, pl.state, pl.band, pl.diving);
     this.testBodies.render(alpha);
     this.destruction.frameUpdate(alpha);
+    this.interiors.update(simDt, this.heroPos, cam);
+    this.fire.update(simDt, cam);
     this.hud.update(realDt, !config.debug.freeCamera && this.strength.inReach());
     this.environment.focus.copy(this.heroPos);
     this.environment.update(realDt);
+    updateInteriorUniforms(config.sun.elevationDeg);
     this.ground.update();
     this.city.update();
     this.updateWireframe();
@@ -338,6 +354,11 @@ export class Game {
     this.strength.fixedUpdate(input, dt);
     this.physics.step();
     this.destruction.fixedUpdate(dt);
+    if (!config.debug.freeCamera) {
+      const pv = this.player.velocity;
+      const pp = this.player.position;
+      this.interiors.heroSmash(pp.x, pp.y + config.player.height / 2, pp.z, pv.x, pv.y, pv.z);
+    }
     // Low sonic pass: windows along the route blow out.
     const pl = this.player;
     this.sonicTimer -= dt;
@@ -397,6 +418,32 @@ export class Game {
     });
   }
 
+  /** Debug tool: set fire to whatever is under the reticle. */
+  fireUnderReticle(): boolean {
+    const cam = this.renderer.camera;
+    cam.getWorldDirection(_fwd);
+    const ray = new this.physics.R.Ray(
+      { x: cam.position.x, y: cam.position.y, z: cam.position.z },
+      { x: _fwd.x, y: _fwd.y, z: _fwd.z },
+    );
+    const hit = this.physics.world.castRay(
+      ray,
+      600,
+      true,
+      undefined,
+      undefined,
+      this.player.playerCollider,
+    );
+    if (!hit) return false;
+    // A little past the surface, so a wall's fire starts in the room behind it.
+    const t = hit.timeOfImpact + 1.5;
+    return this.fire.igniteAt(
+      cam.position.x + _fwd.x * t,
+      cam.position.y + _fwd.y * t,
+      cam.position.z + _fwd.z * t,
+    );
+  }
+
   /** Debug tool: cut every column of the story under the reticle (supports test). */
   cutStoryUnderReticle(): boolean {
     const cam = this.renderer.camera;
@@ -427,7 +474,7 @@ export class Game {
     s.drawCalls = info.render.drawCalls;
     s.triangles = info.render.triangles;
     s.simSteps = this.simLoop.lastSteps;
-    s.particles = this.effects.particleCount;
+    s.particles = this.effects.particleCount + this.fire.particleCount;
     s.decals = this.effects.decalCount;
     const ds = this.destruction.stats();
     s.piecesShown = ds.shown;
@@ -485,4 +532,14 @@ async function toggleFullscreen() {
   // Keyboard Lock (Chromium) lets Ctrl+W / Esc reach the game while fullscreen.
   const kb = (navigator as unknown as { keyboard?: { lock?: () => Promise<void> } }).keyboard;
   await kb?.lock?.().catch(() => undefined);
+}
+
+function countMaterials(scene: THREE.Scene) {
+  const set = new Set<THREE.Material>();
+  scene.traverse((o) => {
+    const m = (o as THREE.Mesh).material;
+    if (Array.isArray(m)) m.forEach((x) => set.add(x));
+    else if (m) set.add(m);
+  });
+  return set.size;
 }

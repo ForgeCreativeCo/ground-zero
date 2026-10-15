@@ -4,6 +4,8 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { config } from '../config';
 import type { ToneMappingName } from '../config/render';
 
+const _size = new THREE.Vector2();
+
 const TONE_MAPPINGS: Record<ToneMappingName, THREE.ToneMapping> = {
   AgX: THREE.AgXToneMapping,
   ACES: THREE.ACESFilmicToneMapping,
@@ -16,6 +18,7 @@ export class GameRenderer {
   readonly camera: THREE.PerspectiveCamera;
   private pipeline!: THREE.RenderPipeline;
   private bloomNode: ReturnType<typeof bloom> | null = null;
+  private scenePass!: ReturnType<typeof pass>;
   private lastW = 0;
   private lastH = 0;
   private lastPixelRatio = 0;
@@ -48,6 +51,7 @@ export class GameRenderer {
     const c = config.render;
     this.pipeline = new THREE.RenderPipeline(this.renderer);
     const scenePass = pass(this.scene, this.camera, { samples: c.msaaSamples });
+    this.scenePass = scenePass;
     const color = scenePass.getTextureNode('output');
     if (c.bloom.enabled) {
       this.bloomNode = bloom(color, c.bloom.strength, c.bloom.radius, c.bloom.threshold);
@@ -103,6 +107,30 @@ export class GameRenderer {
 
   render() {
     this.pipeline.render();
+  }
+
+  /**
+   * Compiles every material in `scene` for the scene pass's own render target (format, samples):
+   * compiling for the canvas would build pipelines the game never uses.
+   */
+  async compileForScenePass(scene: THREE.Object3D, camera: THREE.Camera = this.camera) {
+    const r = this.renderer;
+    const target = (this.scenePass as unknown as { renderTarget: THREE.RenderTarget }).renderTarget;
+    // Size the pass target now (it starts 1x1 until the first frame), so compiled pipelines don't
+    // reference textures the first frame would destroy by resizing.
+    r.getDrawingBufferSize(_size);
+    if (target.width !== _size.x || target.height !== _size.y) target.setSize(_size.x, _size.y);
+    const prev = r.getRenderTarget();
+    // compileAsync captures the render target synchronously, then compiles asynchronously while
+    // frames keep rendering: restore the real target straight away.
+    r.setRenderTarget(target);
+    let pending: Promise<unknown>;
+    try {
+      pending = r.compileAsync(scene, camera, this.scene);
+    } finally {
+      r.setRenderTarget(prev);
+    }
+    await pending;
   }
 
   setAnimationLoop(fn: ((time: number) => void) | null) {

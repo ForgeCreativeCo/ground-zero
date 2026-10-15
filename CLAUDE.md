@@ -60,7 +60,8 @@ tests/e2e/       Playwright smoke + perf
 - Deterministic generation from the seed (`?seed=1234`) via `core/rng.ts`. Never `Math.random()` in world generation.
 - Spread heavy work across frames; move to Web Workers if it spikes.
 - Pure logic (math, graphs, heat, damage) is kept free of three/DOM so it can be unit-tested.
-- **Destruction performance rules** (measured in M2, see docs/DECISIONS.md): never give each building piece its own Rapier collider (every static collider costs per step); use the merged colliders in `destruction/buildingColliders.ts`. Untouched buildings draw as proxies (`render/buildingProxies.ts`) until first damage. Anything new that draws or casts shadows must be added to the startup prewarm, or its first appearance stalls mid-play.
+- **Destruction performance rules** (measured in M2, see docs/DECISIONS.md): never give each building piece its own Rapier collider (every static collider costs per step); use the merged colliders in `destruction/buildingColliders.ts`. Untouched buildings draw as proxies (`render/buildingProxies.ts`) until first damage. Anything new that draws or casts shadows must be registered with the background shader warm-up (`render/shaderWarmup.ts`), or its first appearance stalls mid-play.
+- **three.js shader rules** (measured in M3): never create an `InstancedMesh` mid-play (three.js builds shader code per instanced mesh, 100–300 ms each); create it up front and reuse it. Share one material per family and pick the look with a per-instance attribute. In TSL, evaluate shared nodes such as `normalWorld` at the top of a `Fn`, before any `If`/`select`: a node first built inside a branch is left unset outside it (surfaces render black).
 - Test hooks live on `window.__GZ__` (see `src/core/testHooks.ts`); Playwright drives the game through them.
 
 ## Performance budgets (DESIGN.md §13; tunable in `src/config/budgets.ts`, enforced at runtime)

@@ -4,7 +4,8 @@ import { config } from '../config';
 import { events } from '../core/events';
 import { Rng } from '../core/rng';
 import type { Physics } from '../physics/physics';
-import { batchGeometry, type PieceVisual } from '../render/pieceMaterials';
+import { batchGeometry, pieceMaterial, VI } from '../render/pieceMaterials';
+import { uploadLive } from '../render/uploadRange';
 import type { PieceRenderer } from '../render/pieceRenderer';
 import type { BuildingModel } from './buildingModel';
 import type { CityStructure } from './cityStructure';
@@ -36,44 +37,42 @@ interface ClusterMesh {
   mesh: THREE.InstancedMesh;
   slotPiece: Int32Array;
   count: number;
-  visual: PieceVisual;
 }
 
 /**
- * Pre-created, prewarmed instanced meshes for falling sections, reused between collapses so a
- * collapse never stalls creating and first-drawing new meshes.
+ * Pre-created instanced meshes for falling sections, one per section with every look set per
+ * instance, reused between collapses: three.js generates shader code per instanced mesh, so
+ * making one mid-collapse would stall.
  */
 export class ClusterMeshPool {
-  private free = new Map<PieceVisual, ClusterMesh[]>();
+  private free: ClusterMesh[] = [];
+  private all: ClusterMesh[] = [];
   private box = new THREE.BoxGeometry(1, 1, 1);
 
   constructor(
-    private readonly materials: Map<PieceVisual, THREE.Material>,
+    private readonly material: THREE.Material,
     private readonly capacity: number,
-    perVisual: number,
+    count: number,
   ) {
-    for (const v of materials.keys()) {
-      const list: ClusterMesh[] = [];
-      for (let i = 0; i < perVisual; i++) list.push(this.create(v, capacity));
-      this.free.set(v, list);
-    }
+    for (let i = 0; i < count; i++) this.free.push(this.create(capacity));
   }
 
-  private create(v: PieceVisual, n: number): ClusterMesh {
-    const g = batchGeometry(this.box, n);
-    const mesh = new THREE.InstancedMesh(g.geometry, this.materials.get(v)!, n);
+  private create(n: number): ClusterMesh {
+    const g = batchGeometry(this.box, n, 'structure');
+    const mesh = new THREE.InstancedMesh(g.geometry, this.material, n);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
     mesh.count = 0;
-    return { mesh, slotPiece: new Int32Array(n).fill(-1), count: 0, visual: v };
+    const cm = { mesh, slotPiece: new Int32Array(n).fill(-1), count: 0 };
+    this.all.push(cm);
+    return cm;
   }
 
-  acquire(v: PieceVisual, n: number): ClusterMesh {
-    const list = this.free.get(v) ?? [];
-    const i = list.findIndex((c) => c.slotPiece.length >= n);
-    if (i >= 0) return list.splice(i, 1)[0]!;
-    return this.create(v, Math.max(n, this.capacity));
+  acquire(n: number): ClusterMesh {
+    const i = this.free.findIndex((c) => c.slotPiece.length >= n);
+    if (i >= 0) return this.free.splice(i, 1)[0]!;
+    return this.create(Math.max(n, this.capacity));
   }
 
   release(cm: ClusterMesh) {
@@ -81,30 +80,12 @@ export class ClusterMeshPool {
     cm.count = 0;
     cm.mesh.count = 0;
     cm.slotPiece.fill(-1);
-    let list = this.free.get(cm.visual);
-    if (!list) this.free.set(cm.visual, (list = []));
-    list.push(cm);
+    this.free.push(cm);
   }
 
-  /** Every pooled mesh, with one degenerate instance, for the startup prewarm. */
-  prewarmGroup(): THREE.Group {
-    const g = new THREE.Group();
-    for (const list of this.free.values()) {
-      for (const cm of list) {
-        cm.mesh.setMatrixAt(0, _m.makeScale(0, 0, 0));
-        cm.mesh.count = 1;
-        cm.mesh.instanceMatrix.needsUpdate = true;
-        g.add(cm.mesh);
-      }
-    }
-    return g;
-  }
-
-  endPrewarm(g: THREE.Group) {
-    for (const child of [...g.children]) {
-      (child as THREE.InstancedMesh).count = 0;
-      g.remove(child);
-    }
+  /** Every pooled mesh (for the background shader warm-up). */
+  allMeshes(): THREE.InstancedMesh[] {
+    return this.all.map((c) => c.mesh);
   }
 }
 
@@ -119,8 +100,9 @@ export class Cluster {
   /** story → pieces, and story → collider. */
   readonly stories = new Map<number, number[]>();
   private colliders = new Map<number, RAPIER.Collider>();
-  private meshes = new Map<PieceVisual, ClusterMesh>();
-  private slotOf = new Map<number, { cm: ClusterMesh; slot: number }>();
+  private cm: ClusterMesh;
+  /** piece → slot in this section's mesh. */
+  private slotOf = new Map<number, number>();
   readonly origin = new THREE.Vector3();
   private pos = new THREE.Vector3();
   private quat = new THREE.Quaternion();
@@ -202,21 +184,13 @@ export class Cluster {
       this.colliders.set(f, c);
     }
 
-    // Render: one instanced mesh per visual, local to the body.
-    const counts = new Map<PieceVisual, number>();
+    // Render: one instanced mesh for the whole section, local to the body.
+    const cm = (this.cm = this.pool.acquire(pieces.length));
+    this.group.add(cm.mesh);
+    const visAttr = cm.mesh.geometry.getAttribute('aVisual') as THREE.InstancedBufferAttribute;
     for (const id of pieces) {
-      const v = renderer.visualFor(id);
-      counts.set(v, (counts.get(v) ?? 0) + 1);
-    }
-    for (const [v, n] of counts) {
-      const cm = this.pool.acquire(v, n);
-      this.meshes.set(v, cm);
-      this.group.add(cm.mesh);
-    }
-    for (const id of pieces) {
-      const v = renderer.visualFor(id);
-      const cm = this.meshes.get(v)!;
       const slot = cm.count++;
+      visAttr.setX(slot, VI(renderer.visualFor(id)));
       _m.compose(
         _p.set(s.cx[id]! - this.origin.x, s.cy[id]! - this.origin.y, s.cz[id]! - this.origin.z),
         _q.identity(),
@@ -232,12 +206,15 @@ export class Cluster {
         0,
       );
       cm.slotPiece[slot] = id;
-      this.slotOf.set(id, { cm, slot });
+      this.slotOf.set(id, slot);
     }
-    for (const cm of this.meshes.values()) {
-      cm.mesh.count = cm.count;
-      cm.mesh.instanceMatrix.needsUpdate = true;
-    }
+    cm.mesh.count = cm.count;
+    uploadLive(
+      cm.count,
+      cm.mesh.instanceMatrix,
+      cm.mesh.geometry.getAttribute('aState') as THREE.InstancedBufferAttribute,
+      visAttr,
+    );
     this.group.position.copy(this.origin);
     scene.add(this.group);
   }
@@ -378,10 +355,10 @@ export class Cluster {
     // This story's own pieces become rubble chunks falling from where they are.
     let mass = 0;
     for (const id of list) {
-      const e = this.slotOf.get(id);
-      if (e) {
-        const moved = removeSlot(e.cm, e.slot);
-        if (moved >= 0) this.slotOf.get(moved)!.slot = e.slot;
+      const slot = this.slotOf.get(id);
+      if (slot !== undefined) {
+        const moved = removeSlot(this.cm, slot);
+        if (moved >= 0) this.slotOf.set(moved, slot);
         this.slotOf.delete(id);
       }
       s.state[id] = STATE.destroyed;
@@ -399,10 +376,13 @@ export class Cluster {
     this.physics.world.removeCollider(c, true);
     this.colliders.delete(f);
     this.stories.delete(f);
-    for (const cm of this.meshes.values()) {
-      cm.mesh.count = cm.count;
-      cm.mesh.instanceMatrix.needsUpdate = true;
-    }
+    this.cm.mesh.count = this.cm.count;
+    uploadLive(
+      this.cm.count,
+      this.cm.mesh.instanceMatrix,
+      this.cm.mesh.geometry.getAttribute('aState') as THREE.InstancedBufferAttribute,
+      this.cm.mesh.geometry.getAttribute('aVisual') as THREE.InstancedBufferAttribute,
+    );
     events.emit('cluster:crush', { x: ct.x, y: ct.y, z: ct.z, mass });
   }
 
@@ -429,8 +409,7 @@ export class Cluster {
 
   dispose(scene: THREE.Scene) {
     scene.remove(this.group);
-    for (const cm of this.meshes.values()) this.pool.release(cm);
-    this.meshes.clear();
+    this.pool.release(this.cm);
     if (this.physics.world.getRigidBody(this.body.handle))
       this.physics.world.removeRigidBody(this.body);
   }
@@ -446,7 +425,8 @@ function removeSlot(cm: ClusterMesh, slot: number): number {
   cm.mesh.setMatrixAt(slot, _m);
   const st = cm.mesh.geometry.getAttribute('aState') as THREE.InstancedBufferAttribute;
   st.setXYZW(slot, st.getX(last), st.getY(last), 0, 0);
-  st.needsUpdate = true;
+  const vis = cm.mesh.geometry.getAttribute('aVisual') as THREE.InstancedBufferAttribute;
+  vis.setX(slot, vis.getX(last));
   const moved = cm.slotPiece[last]!;
   cm.slotPiece[slot] = moved;
   cm.slotPiece[last] = -1;
@@ -491,7 +471,11 @@ export class StructuralSystem {
       stressFx(x: number, y: number, z: number, intensity: number): void;
     },
   ) {
-    this.pool = new ClusterMeshPool(renderer.materials, config.structure.clusterMeshCapacity, 2);
+    this.pool = new ClusterMeshPool(
+      pieceMaterial(),
+      config.structure.clusterMeshCapacity,
+      config.structure.clusterMeshPool,
+    );
   }
 
   markDirty(building: number) {

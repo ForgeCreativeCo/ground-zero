@@ -138,6 +138,14 @@ export class BuildingModel {
     return this.roofBase + r;
   }
 
+  /** Facade side of a panel (0 = -z, 1 = +x, 2 = +z, 3 = -x); 0 for non-panels. */
+  panelSide(id: number) {
+    if (id < this.panelBase || id >= this.roofBase) return 0;
+    const q = (id - this.panelBase) % this.panelsPerFloor;
+    const so = this.sideOffset;
+    return q < so[1]! ? 0 : q < so[2]! ? 1 : q < so[3]! ? 2 : 3;
+  }
+
   /** Story a piece belongs to (roof pieces: the top story). */
   floorOf(id: number) {
     if (id < this.slabBase) return Math.floor((id - this.colBase) / (this.ncx * this.ncz));

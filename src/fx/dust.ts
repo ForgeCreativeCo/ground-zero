@@ -22,6 +22,17 @@ export interface DustOptions {
   drag: () => number;
   /** Peak opacity of a particle. */
   opacity: number;
+  /** Upward acceleration (m/s²): smoke rises. Default: settles slowly. */
+  lift?: () => number;
+  /** Wind drift added to motion (m/s). */
+  windX?: () => number;
+  windZ?: () => number;
+  /** Additive glow (flames, embers) instead of soft alpha. */
+  additive?: boolean;
+  /** Colour multiplier (above 1 glows with bloom). */
+  brightness?: number;
+  /** Fade curve: fast in and out for flames; the default lingers like dust. */
+  flicker?: boolean;
 }
 
 const defaultDust: DustOptions = {
@@ -73,10 +84,14 @@ export class Dust {
     this.alpha = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
     this.alpha.setUsage(THREE.DynamicDrawUsage);
 
-    const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false });
+    const mat = new THREE.MeshBasicNodeMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    });
     const a = instancedDynamicBufferAttribute<'float'>(this.alpha, 'float', 1, 0);
     const d = uv().sub(0.5).length();
-    mat.colorNode = this.uColor;
+    mat.colorNode = opts.brightness ? this.uColor.mul(opts.brightness) : this.uColor;
     // Soft round puff; fades out right in front of the camera so a cloud at the lens doesn't
     // white out the screen.
     const nearFade = smoothstep(1.5, 6, positionView.z.negate());
@@ -140,6 +155,10 @@ export class Dust {
     this.uColor.value.set(this.opts.color());
     const drag = Math.exp(-this.opts.drag() * dt);
     const alpha = this.alpha.array as Float32Array;
+    const lift = this.opts.lift ? this.opts.lift() : -0.4;
+    const wx = this.opts.windX ? this.opts.windX() * dt : 0;
+    const wz = this.opts.windZ ? this.opts.windZ() * dt : 0;
+    const flicker = !!this.opts.flicker;
     let i = 0;
     while (i < this.count) {
       this.age[i]! += dt;
@@ -148,11 +167,11 @@ export class Dust {
         continue;
       }
       this.vx[i]! *= drag;
-      this.vy[i] = this.vy[i]! * drag - 0.4 * dt;
+      this.vy[i] = this.vy[i]! * drag + lift * dt;
       this.vz[i]! *= drag;
-      this.px[i]! += this.vx[i]! * dt;
+      this.px[i]! += this.vx[i]! * dt + wx;
       this.py[i] = Math.max(0.2, this.py[i]! + this.vy[i]! * dt);
-      this.pz[i]! += this.vz[i]! * dt;
+      this.pz[i]! += this.vz[i]! * dt + wz;
       const t = this.age[i]! / this.life[i]!;
       let s = this.size[i]! + this.grow[i]! * this.age[i]!;
       _p.set(this.px[i]!, this.py[i]!, this.pz[i]!);
@@ -161,7 +180,9 @@ export class Dust {
       if (_p.distanceToSquared(camera.position) < (s * 0.5 + config.fx.dust.nearCull) ** 2) s = 0;
       _m.compose(_p, camera.quaternion, _s.set(s, s, s));
       this.mesh.setMatrixAt(i, _m);
-      alpha[i] = Math.min(1, t * 8) * (1 - t) * (1 - t) * this.opts.opacity;
+      alpha[i] = flicker
+        ? Math.min(1, t * 12) * (1 - t) * this.opts.opacity
+        : Math.min(1, t * 8) * (1 - t) * (1 - t) * this.opts.opacity;
       i++;
     }
     this.mesh.count = this.count;

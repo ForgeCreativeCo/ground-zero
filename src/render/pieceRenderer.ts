@@ -4,11 +4,13 @@ import { Rng } from '../core/rng';
 import type { CityStructure } from '../destruction/cityStructure';
 import { FLAG, KIND, MAT, STATE } from '../destruction/pieces';
 import { BuildingProxies } from './buildingProxies';
+import { uploadLive } from './uploadRange';
 import {
   batchGeometry,
   createFrameGeometry,
   pieceMaterial,
   PIECE_VISUALS,
+  VI,
   type PieceVisual,
 } from './pieceMaterials';
 
@@ -18,11 +20,17 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _yaw90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 
-/** One instanced draw: pieces of one visual class in one chunk, packed with swap-remove. */
+/** Which mesh shape a visual draws with. */
+type Shape = 0 | 1 | 2; // box, holed panel frame, curtain-wall mullion frame
+const shapeOf = (v: PieceVisual): Shape => (v === 'frameGlass' ? 2 : v.startsWith('frame') ? 1 : 0);
+
+/** One instanced draw for every shown piece of one shape, packed with swap-remove. */
 class Batch {
   readonly mesh: THREE.InstancedMesh;
   readonly tint: THREE.InstancedBufferAttribute;
   readonly state: THREE.InstancedBufferAttribute;
+  readonly room: THREE.InstancedBufferAttribute;
+  readonly visual: THREE.InstancedBufferAttribute;
   readonly slotPiece: Int32Array;
   count = 0;
   dirty = false;
@@ -33,12 +41,13 @@ class Batch {
     readonly capacity: number,
     bounds: THREE.Sphere,
   ) {
-    const g = batchGeometry(geometry, capacity);
+    const g = batchGeometry(geometry, capacity, 'structure');
     this.tint = g.tint;
     this.state = g.state;
+    this.room = g.room;
+    this.visual = g.visual;
     this.mesh = new THREE.InstancedMesh(g.geometry, material, capacity);
     this.mesh.count = 0;
-    this.mesh.visible = false;
     // Pieces don't cast shadows themselves: merged shadow boxes (BuildingProxies) do, far cheaper.
     this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
@@ -46,11 +55,12 @@ class Batch {
     this.slotPiece = new Int32Array(capacity).fill(-1);
   }
 
-  add(piece: number, m: THREE.Matrix4, r: number, g: number, b: number): number {
+  add(piece: number, m: THREE.Matrix4, r: number, g: number, b: number, visual: number): number {
     const slot = this.count++;
     this.mesh.setMatrixAt(slot, m);
     this.tint.setXYZ(slot, r, g, b);
     this.state.setXYZW(slot, 0, 0, 0, 0);
+    this.visual.setX(slot, visual);
     this.slotPiece[slot] = piece;
     this.dirty = true;
     return slot;
@@ -74,6 +84,14 @@ class Batch {
       this.state.getZ(last),
       this.state.getW(last),
     );
+    this.room.setXYZW(
+      slot,
+      this.room.getX(last),
+      this.room.getY(last),
+      this.room.getZ(last),
+      this.room.getW(last),
+    );
+    this.visual.setX(slot, this.visual.getX(last));
     const moved = this.slotPiece[last]!;
     this.slotPiece[slot] = moved;
     this.slotPiece[last] = -1;
@@ -84,33 +102,38 @@ class Batch {
     if (!this.dirty) return;
     this.dirty = false;
     this.mesh.count = this.count;
-    this.mesh.visible = this.count > 0;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.tint.needsUpdate = true;
-    this.state.needsUpdate = true;
+    uploadLive(this.count, this.mesh.instanceMatrix, this.tint, this.state, this.room, this.visual);
   }
 }
 
+const _room = new Float32Array(4);
+
 /**
- * Draws every static building piece (DESIGN.md §7.1 rendering). Per city block and per visual
- * class there is one instanced batch. Interior pieces join a batch only once revealed, so an
- * intact skyline costs just its shells. Breached panels swap to a holed frame mesh.
+ * Draws every static building piece of damaged buildings (DESIGN.md §7.1 rendering): three
+ * instanced draws for the whole city, one per shape, with each piece's look picked per instance
+ * by the shared piece material. Created up front: three.js generates shader code per instanced
+ * mesh, so making meshes mid-play would stall. Interior pieces join only once revealed.
  */
 export class PieceRenderer {
   readonly group = new THREE.Group();
   readonly materials = new Map<PieceVisual, THREE.MeshStandardNodeMaterial>();
-  private batches: (Batch | null)[];
-  /** Per piece: global batch index (chunk * visuals + visual), slot within it, or -1. */
-  private pieceBatch: Int32Array;
+  private batches: Batch[];
+  /** Per piece: batch (shape) and slot within it, or -1. */
+  private pieceBatch: Int8Array;
   private pieceSlot: Int32Array;
   private tints: Float32Array;
-  private boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  private frameGeo = createFrameGeometry();
-  private mullionGeo = createFrameGeometry(0.05, 0.05, 0.05);
-  private nv = PIECE_VISUALS.length;
-  private bounds: THREE.Sphere[];
-  private capacities: Int32Array;
   readonly proxies: BuildingProxies;
+  /**
+   * Room behind a panel's window: [side + seed, power, fire, burnt] (set by the interior system;
+   * the default is a lit, powered room seeded from the piece id).
+   */
+  roomInfo: (id: number, out: Float32Array) => void = (id, out) => {
+    const b = this.city.buildingOf(id);
+    out[0] = b.panelSide(id) + ((id * 0.6180339) % 1) * 0.99;
+    out[1] = 1;
+    out[2] = 0;
+    out[3] = 0;
+  };
   /** Buildings drawn as real pieces (damaged at least once); the rest use proxies. */
   readonly active: Uint8Array;
 
@@ -121,7 +144,7 @@ export class PieceRenderer {
   ) {
     for (const v of PIECE_VISUALS) this.materials.set(v, pieceMaterial(v));
     const store = city.store;
-    this.pieceBatch = new Int32Array(store.count).fill(-1);
+    this.pieceBatch = new Int8Array(store.count).fill(-1);
     this.pieceSlot = new Int32Array(store.count).fill(-1);
 
     // Per-building tint: slight variation so blocks don't look cloned.
@@ -135,26 +158,27 @@ export class PieceRenderer {
       this.tints[i * 3 + 2] = k * (2 - warm);
     });
 
-    // Capacity per (chunk, visual): every piece that could ever show there. Panels can show as
-    // either their intact or their frame visual, so count them for both.
-    const nb = city.chunkCount * this.nv;
-    this.capacities = new Int32Array(nb);
-    const boxes = Array.from({ length: city.chunkCount }, () => new THREE.Box3());
-    city.buildings.forEach((b, bi) => {
-      const chunk = city.chunkOf[bi]!;
-      boxes[chunk]!.expandByPoint(_p.set(b.x0, 0, b.z0));
-      boxes[chunk]!.expandByPoint(_p.set(b.x1, b.height + 10, b.z1));
+    // Capacity per shape: every piece that could ever show with it.
+    const caps = [0, 0, 0];
+    const bounds = new THREE.Box3();
+    city.buildings.forEach((b) => {
+      bounds.expandByPoint(_p.set(b.x0, 0, b.z0));
+      bounds.expandByPoint(_p.set(b.x1, b.height + 10, b.z1));
       for (let id = b.base; id < b.end; id++) {
-        const v = this.visualFor(id, false);
-        this.capacities[chunk * this.nv + PIECE_VISUALS.indexOf(v)]!++;
-        if (store.kind[id] === KIND.panel && !(store.flags[id]! & FLAG.parapet)) {
-          const fv = this.visualFor(id, true);
-          if (fv !== v) this.capacities[chunk * this.nv + PIECE_VISUALS.indexOf(fv)]!++;
-        }
+        caps[0]!++;
+        if (store.kind[id] === KIND.panel && !(store.flags[id]! & FLAG.parapet))
+          caps[shapeOf(this.visualFor(id, true))]!++;
       }
     });
-    this.bounds = boxes.map((b) => b.getBoundingSphere(new THREE.Sphere()));
-    this.batches = new Array(nb).fill(null);
+    const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+    const material = pieceMaterial();
+    const geos = [
+      new THREE.BoxGeometry(1, 1, 1),
+      createFrameGeometry(),
+      createFrameGeometry(0.05, 0.05, 0.05),
+    ];
+    this.batches = geos.map((g, i) => new Batch(g, material, Math.max(1, caps[i]!), sphere));
+    for (const b of this.batches) this.group.add(b.mesh);
 
     this.active = new Uint8Array(city.buildings.length);
     this.proxies = new BuildingProxies(scene, city, this.tints);
@@ -174,27 +198,9 @@ export class PieceRenderer {
     return breached ? 'frameConcrete' : 'concrete';
   }
 
-  private batch(chunk: number, visual: PieceVisual): Batch {
-    const vi = PIECE_VISUALS.indexOf(visual);
-    const idx = chunk * this.nv + vi;
-    let b = this.batches[idx];
-    if (!b) {
-      const geo =
-        visual === 'frameGlass'
-          ? this.mullionGeo
-          : visual.startsWith('frame')
-            ? this.frameGeo
-            : this.boxGeo;
-      b = new Batch(
-        geo,
-        this.materials.get(visual)!,
-        Math.max(1, this.capacities[idx]!),
-        this.bounds[chunk]!,
-      );
-      this.batches[idx] = b;
-      this.group.add(b.mesh);
-    }
-    return b;
+  /** The three instanced meshes (for the shader warm-up). */
+  get meshes() {
+    return this.batches.map((b) => b.mesh);
   }
 
   /** Swap a building from its proxy to real pieces (first damage). Idempotent. */
@@ -224,12 +230,11 @@ export class PieceRenderer {
     if (s.state[id] === STATE.destroyed || !s.isStatic(id)) return;
     const bi = s.building[id]!;
     if (!this.active[bi]) return;
-    const chunk = this.city.chunkOf[bi]!;
     const visual = this.visualFor(id);
-    const batch = this.batch(chunk, visual);
+    const shape = shapeOf(visual);
+    const batch = this.batches[shape]!;
     _p.set(s.cx[id]!, s.cy[id]!, s.cz[id]!);
-    const frame = visual.startsWith('frame');
-    if (frame && s.hx[id]! < s.hz[id]!) {
+    if (shape !== 0 && s.hx[id]! < s.hz[id]!) {
       // Frames are modelled facing ±z; panels on the x-facing sides need a quarter turn.
       _m.compose(_p, _yaw90, _s.set(s.hz[id]! * 2, s.hy[id]! * 2, s.hx[id]! * 2));
     } else {
@@ -241,8 +246,9 @@ export class PieceRenderer {
       this.tints[bi * 3]!,
       this.tints[bi * 3 + 1]!,
       this.tints[bi * 3 + 2]!,
+      VI(visual),
     );
-    this.pieceBatch[id] = chunk * this.nv + PIECE_VISUALS.indexOf(visual);
+    this.pieceBatch[id] = shape;
     this.pieceSlot[id] = slot;
     this.writeState(id);
   }
@@ -257,6 +263,14 @@ export class PieceRenderer {
     this.pieceBatch[id] = -1;
   }
 
+  /** Re-reads every shown panel of a building (power, fire and soot changes). */
+  refreshBuilding(building: number) {
+    if (!this.active[building]) return;
+    const b = this.city.buildings[building]!;
+    for (let id = b.panelBase; id < b.roofBase; id++)
+      if (this.pieceSlot[id]! >= 0) this.writeState(id);
+  }
+
   /** Re-reads a piece's state (cracks, windows, breach swap). */
   refresh(id: number) {
     if (this.pieceSlot[id]! < 0) return;
@@ -265,13 +279,14 @@ export class PieceRenderer {
       this.hide(id);
       return;
     }
-    const want =
-      this.city.chunkOf[s.building[id]!]! * this.nv + PIECE_VISUALS.indexOf(this.visualFor(id));
-    if (want !== this.pieceBatch[id]) {
+    const visual = this.visualFor(id);
+    const batch = this.batches[this.pieceBatch[id]!]!;
+    if (shapeOf(visual) !== this.pieceBatch[id]) {
       this.hide(id);
       this.show(id);
       return;
     }
+    batch.visual.setX(this.pieceSlot[id]!, VI(visual));
     this.writeState(id);
   }
 
@@ -288,46 +303,30 @@ export class PieceRenderer {
       this.pieceSlot[id]!,
       cracked,
       s.flags[id]! & FLAG.windowsBroken ? 1 : 0,
-      Math.min(1, s.temperature[id]! / 800),
+      Math.min(1, Math.max(s.soot[id]!, s.temperature[id]! / 800)),
       Math.min(1, s.frozen[id]!),
     );
+    if (s.kind[id] === KIND.panel) {
+      this.roomInfo(id, _room);
+      batch.room.setXYZW(this.pieceSlot[id]!, _room[0]!, _room[1]!, _room[2]!, _room[3]!);
+    }
     batch.dirty = true;
   }
 
-  flush() {
-    for (const b of this.batches) b?.flush();
-    this.proxies.flush();
+  /** Forces every batch to re-upload its count and data on the next flush. */
+  markAllDirty() {
+    for (const b of this.batches) b.dirty = true;
   }
 
-  /**
-   * Startup prewarm: create every batch up front and draw each once (with a degenerate instance),
-   * so the first damage to a block doesn't stall on creating and first-drawing its meshes.
-   */
-  setPrewarm(on: boolean) {
-    if (on) {
-      for (let idx = 0; idx < this.batches.length; idx++) {
-        if (this.capacities[idx]! <= 0) continue;
-        const b = this.batch(Math.floor(idx / this.nv), PIECE_VISUALS[idx % this.nv]!);
-        if (b.count === 0) {
-          b.mesh.setMatrixAt(0, _m.makeScale(0, 0, 0));
-          b.mesh.count = 1;
-          b.mesh.visible = true;
-          b.mesh.instanceMatrix.needsUpdate = true;
-        }
-      }
-    } else {
-      for (const b of this.batches) {
-        if (!b) continue;
-        b.dirty = true;
-        b.flush();
-      }
-    }
+  flush() {
+    for (const b of this.batches) b.flush();
+    this.proxies.flush();
   }
 
   /** Stats for the perf HUD. */
   get shownCount() {
     let n = 0;
-    for (const b of this.batches) if (b) n += b.count;
+    for (const b of this.batches) n += b.count;
     return n;
   }
 }

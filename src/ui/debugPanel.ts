@@ -13,6 +13,8 @@ export interface DebugActions {
   toggleFullscreen(): void;
   /** Cut every column of the story under the reticle (structural test). */
   cutStory(): boolean;
+  startFire(): boolean;
+  toggleNight(): void;
 }
 
 /**
@@ -59,6 +61,8 @@ export class DebugPanel {
     f.addButton({ title: 'Clear test bodies' }).on('click', () => actions.clearTestBodies());
     f.addButton({ title: 'Reset camera' }).on('click', () => actions.resetCamera());
     f.addButton({ title: 'Cut supports under reticle' }).on('click', () => actions.cutStory());
+    f.addButton({ title: 'Start fire under reticle' }).on('click', () => actions.startFire());
+    f.addButton({ title: 'Toggle day / night' }).on('click', () => actions.toggleNight());
 
     const tp = { x: 0, y: 50, z: 0 };
     const tpf = f.addFolder({ title: 'teleport', expanded: false });
@@ -162,6 +166,8 @@ const QUALITY_HIGH: Record<string, ConfigValue> = {
   'render.shadows.mapSize': 2048,
   'render.shadows.cascades': 3,
   'render.maxPixelRatio': 1.5,
+  'interiors.realLights': 2,
+  'fire.lights': 3,
 };
 const QUALITY_LOW: Record<string, ConfigValue> = {
   'render.msaaSamples': 0,
@@ -170,6 +176,8 @@ const QUALITY_LOW: Record<string, ConfigValue> = {
   'render.shadows.mapSize': 1024,
   'render.shadows.cascades': 2,
   'render.maxPixelRatio': 1,
+  'interiors.realLights': 0,
+  'fire.lights': 0,
 };
 
 function reloadWithSeed(seed: number) {

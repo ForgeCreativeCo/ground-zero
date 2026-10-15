@@ -86,9 +86,23 @@ export class Environment {
 
     // Sun fades out as it reaches the horizon.
     const horizonFade = THREE.MathUtils.smoothstep(sun.elevationDeg, -2, 6);
-    this.sun.intensity = sun.intensity * horizonFade;
-    this.sun.color.set(sun.color);
-    _dir.copy(this.sunDirection).multiplyScalar(sun.distance);
+    // Below the horizon the same light becomes a dim, cool moon high on the other side.
+    if (horizonFade > 0.001) {
+      this.sun.intensity = sun.intensity * horizonFade;
+      this.sun.color.set(sun.color);
+      _dir.copy(this.sunDirection).multiplyScalar(sun.distance);
+    } else {
+      const m = config.moon;
+      this.sun.intensity = m.intensity * THREE.MathUtils.smoothstep(-sun.elevationDeg, 0, 8);
+      this.sun.color.set(m.color);
+      _dir
+        .setFromSphericalCoords(
+          1,
+          THREE.MathUtils.degToRad(90 - m.elevationDeg),
+          THREE.MathUtils.degToRad(sun.azimuthDeg + 180),
+        )
+        .multiplyScalar(sun.distance);
+    }
     // The sun (and its single shadow map) follows the focus point, snapped to whole metres
     // so the shadow map does not shimmer as the camera moves.
     this.sun.target.position.set(Math.round(this.focus.x), 0, Math.round(this.focus.z));
@@ -103,19 +117,22 @@ export class Environment {
       }
     }
 
-    this.hemi.intensity = sky.hemiIntensity;
+    // Night: ambient light, fog and image lighting fall away as the sun goes down.
+    const day = THREE.MathUtils.smoothstep(sun.elevationDeg, -10, 8);
+    const ambientK = config.moon.ambient + (1 - config.moon.ambient) * day;
+    this.hemi.intensity = sky.hemiIntensity * ambientK;
     this.hemi.color.set(sky.hemiSkyColor);
     this.hemi.groundColor.set(sky.hemiGroundColor);
 
     if (sky.fogEnabled) {
-      this.fog.color.set(sky.fogColor);
+      this.fog.color.set(sky.fogColor).multiplyScalar(0.06 + 0.94 * day);
       this.fog.density = sky.fogDensity;
       this.scene.fog = this.fog;
     } else {
       this.scene.fog = null;
     }
 
-    this.scene.environmentIntensity = sky.envIntensity;
+    this.scene.environmentIntensity = sky.envIntensity * ambientK;
     const k = this.lastSkyKey;
     if (
       k[0] !== sun.elevationDeg ||

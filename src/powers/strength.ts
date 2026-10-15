@@ -222,6 +222,9 @@ export class Strength {
     const t = this.findTarget();
     _d.copy(this.aimDir).multiplyScalar(launch);
     _d.y += lift;
+    // Furniture and interior walls in front of his fists (they have no colliders to aim at).
+    _tmp.copy(_chest).addScaledVector(this.aimDir, config.strength.reach * 0.6);
+    this.destruction.propDamage?.(_tmp.x, _tmp.y, _tmp.z, 1.5, damage * 3, _d.x, _d.y, _d.z);
     if (t.kind === 'piece') {
       this.destruction.hitAt(t.point.x, t.point.y, t.point.z, 1.3, damage, _d.x, _d.y, _d.z);
     } else if (t.kind === 'debris' && t.item) {

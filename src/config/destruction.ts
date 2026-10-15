@@ -69,8 +69,10 @@ export const structure = {
   colliderRebuildsPerFrame: 3,
   /** Clusters with this many pieces or fewer fall apart into individual debris immediately. */
   smallClusterPieces: 8,
-  /** Instances per pooled falling-section mesh (bigger sections get a fresh mesh). */
-  clusterMeshCapacity: 4000,
+  /** Instances per pooled falling-section mesh (a tallest-tower section is ~5k pieces). */
+  clusterMeshCapacity: 8000,
+  /** Pooled falling-section meshes (more simultaneous sections create meshes mid-play). */
+  clusterMeshPool: 6,
 };
 
 /** Debris lifecycle (DESIGN.md §7.8). */
@@ -180,6 +182,7 @@ export const destructionMeta: MetaMap = {
   'structure.colliderRebuildsPerFrame': { min: 1, max: 20, step: 1 },
   'structure.smallClusterPieces': { min: 0, max: 100, step: 1 },
   'structure.clusterMeshCapacity': { min: 100, max: 20000, step: 100, reload: true },
+  'structure.clusterMeshPool': { min: 1, max: 20, step: 1, reload: true },
   'debris.settleTime': { min: 0.2, max: 20, step: 0.1 },
   'debris.minBodySize': { min: 0, max: 2, step: 0.05 },
   'debris.rubbleColliderSize': { min: 0, max: 5, step: 0.05 },

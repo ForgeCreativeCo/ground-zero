@@ -8,6 +8,10 @@ export function installTestHooks(game: Game) {
     get ready() {
       return game.ready;
     },
+    /** Background shader warm-up finished. */
+    get warm() {
+      return game.warm;
+    },
     get frame() {
       return game.frame;
     },
@@ -118,6 +122,29 @@ export function installTestHooks(game: Game) {
         inCluster: (s.flags[id]! & 4) !== 0,
       };
     },
+    interiors: () => ({
+      ...game.interiors.stats(),
+      burning: game.fire.burning.size,
+      openFires: game.fire.points.length,
+      unitsBurnt: game.fire.unitsBurnt,
+    }),
+    unitAt: (x: number, y: number, z: number) => {
+      const u = game.interiors.unitAt(x, y, z);
+      if (u < 0) return null;
+      const us = game.interiors.units;
+      return {
+        id: u,
+        type: us.type[u]!,
+        flags: us.flags[u]!,
+        fire: us.fire[u]!,
+        fuel: us.fuel[u]!,
+        spawned: game.interiors.isSpawned(u),
+      };
+    },
+    igniteAt: (x: number, y: number, z: number) => game.fire.igniteAt(x, y, z),
+    igniteUnit: (u: number) => game.fire.ignite(u, 0.6),
+    fireUnderReticle: () => game.fireUnderReticle(),
+    floorPower: (b: number, f: number) => game.interiors.floorPower(b, f),
     cutStory: (building: number, story: number, fraction = 1) =>
       game.destruction.cutStory(building, story, fraction),
     /** Static pieces left in a building. */

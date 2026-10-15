@@ -11,6 +11,14 @@ export const sun = {
   distance: 600,
 };
 
+/** Night lighting: a dim moon, and how much ambient light survives at night. */
+export const moon = {
+  intensity: 0.35,
+  color: '#9fb4d6',
+  elevationDeg: 42,
+  ambient: 0.1,
+};
+
 export const sky = {
   turbidity: 3,
   rayleigh: 1.2,
@@ -36,6 +44,9 @@ export const environmentMeta: MetaMap = {
   'sun.azimuthDeg': { min: 0, max: 360, step: 0.5 },
   'sun.intensity': { min: 0, max: 10, step: 0.05 },
   'sun.distance': { min: 100, max: 3000, step: 10 },
+  'moon.intensity': { min: 0, max: 3, step: 0.01 },
+  'moon.elevationDeg': { min: 5, max: 90, step: 1 },
+  'moon.ambient': { min: 0, max: 1, step: 0.01 },
   'sky.turbidity': { min: 0, max: 20, step: 0.1 },
   'sky.rayleigh': { min: 0, max: 4, step: 0.01 },
   'sky.mieCoefficient': { min: 0, max: 0.1, step: 0.001 },

@@ -21,12 +21,16 @@ test('perf path stays within budget', async ({ page }) => {
           'render.shadows.mapSize': 2048,
           'render.shadows.cascades': 3,
           'render.maxPixelRatio': 1.5,
+          'interiors.realLights': 2,
+          'fire.lights': 3,
         }),
       ),
     );
   }
   const info = await bootGame(page);
-  await page.waitForTimeout(1500); // shader compile + env map settle
+  // Measure steady play: wait for the background shader warm-up (about 7 s after boot) to finish.
+  await page.waitForFunction(() => window.__GZ__.warm === true, undefined, { timeout: 120_000 });
+  await page.waitForTimeout(1500); // env map settle
   const result = await page.evaluate(() => window.__GZ__.runPerfPath());
   const limits = await page.evaluate(() => ({
     perf: window.__GZ__.config.perf,

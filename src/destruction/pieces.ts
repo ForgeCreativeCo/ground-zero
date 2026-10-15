@@ -62,6 +62,8 @@ export class PieceStore {
   /** °C above ambient (heat vision, M4) and frozen timer (freeze breath, M4). */
   readonly temperature: Float32Array;
   readonly frozen: Float32Array;
+  /** 0..1 soot / charring from fire (visual). */
+  readonly soot: Float32Array;
 
   constructor(count: number) {
     this.count = count;
@@ -81,6 +83,7 @@ export class PieceStore {
     this.mass = new Float32Array(count);
     this.temperature = new Float32Array(count);
     this.frozen = new Float32Array(count);
+    this.soot = new Float32Array(count);
   }
 
   /** Alive and still part of its building. */

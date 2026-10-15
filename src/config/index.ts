@@ -16,8 +16,9 @@ import {
   strength,
   structure,
 } from './destruction';
-import { environmentMeta, sky, sun } from './environment';
+import { environmentMeta, moon, sky, sun } from './environment';
 import { fx, fxMeta } from './fx';
+import { fire, interiors, interiorsMeta, power } from './interiors';
 import { loop, loopMeta } from './loop';
 import { player, playerMeta } from './player';
 import type { MetaMap } from './meta';
@@ -36,6 +37,7 @@ const defaultsTree = {
   loop,
   render,
   sun,
+  moon,
   sky,
   world,
   city,
@@ -51,6 +53,9 @@ const defaultsTree = {
   strength,
   slam,
   sonicCity,
+  interiors,
+  power,
+  fire,
   debugCamera,
   controls,
   bindings,
@@ -78,6 +83,7 @@ export const meta: MetaMap = {
   ...fxMeta,
   ...audioMeta,
   ...destructionMeta,
+  ...interiorsMeta,
   ...debugCameraMeta,
   ...controlsMeta,
   ...budgetsMeta,

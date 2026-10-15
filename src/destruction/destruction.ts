@@ -4,7 +4,7 @@ import { events } from '../core/events';
 import { Rng } from '../core/rng';
 import type { Effects } from '../fx/effects';
 import type { Physics } from '../physics/physics';
-import { batchGeometry } from '../render/pieceMaterials';
+import { batchGeometry, pieceMaterial } from '../render/pieceMaterials';
 import { PieceRenderer } from '../render/pieceRenderer';
 import type { CityLayout } from '../world/cityLayout';
 import { BuildingColliders } from './buildingColliders';
@@ -31,6 +31,19 @@ export class DestructionSystem {
   readonly colliders: BuildingColliders;
   readonly debris: DebrisSystem;
   readonly structure: StructuralSystem;
+  /** Interior props within r of a point take damage too (set by the interior system). */
+  propDamage:
+    | ((
+        x: number,
+        y: number,
+        z: number,
+        r: number,
+        dmg: number,
+        px: number,
+        py: number,
+        pz: number,
+      ) => void)
+    | null = null;
   /** Running property damage in dollars (HUD damage bill; feeds the Nova meter later). */
   bill = 0;
   piecesDestroyed = 0;
@@ -62,10 +75,12 @@ export class DestructionSystem {
     });
     physics.onContactForce = (h1, h2) => this.onContactForce(h1, h2);
     this.colliders.onRebuilt = (b, boxes) => this.renderer.proxies.setShadowBoxes(b, boxes);
+    this.debris.floorQuery = (x, y, z, out) => this.floorUnder(x, y, z, out);
+    this.debris.slabStanding = (id) => this.city.store.isStatic(id);
   }
 
   /** First touch: swap the building from its proxy to real pieces and build its real colliders. */
-  private activate(building: number) {
+  activate(building: number) {
     if (this.renderer.active[building]) return;
     this.renderer.activate(building);
     this.colliders.markDirty(building);
@@ -318,6 +333,7 @@ export class DestructionSystem {
   /** Radial damage with falloff (slams, explosions). Knocks debris away from the centre. */
   blast(x: number, y: number, z: number, radius: number, damage: number, launch: number) {
     const s = this.city.store;
+    this.propDamage?.(x, y, z, radius, damage, 0, launch * 0.3, 0);
     const hits: number[] = [];
     this.city.forEachPieceInSphere(x, y, z, radius, (id) => hits.push(id));
     for (const id of hits) {
@@ -386,6 +402,7 @@ export class DestructionSystem {
     pz: number,
   ) {
     const s = this.city.store;
+    this.propDamage?.(x, y, z, r, damage, px, py, pz);
     const near = this.city.nearestPiece(x, y, z, r);
     if (near < 0) return -1;
     const others: number[] = [];
@@ -587,11 +604,12 @@ export class DestructionSystem {
    */
   prewarmMeshes(camera: THREE.Camera): THREE.Group {
     const g = new THREE.Group();
-    const mats = [...new Set([...this.renderer.materials.values(), ...this.debris.allMaterials()])];
+    // One material for every look now; one instance each of the box and frame geometries.
+    const mats = [pieceMaterial()];
     const box = new THREE.BoxGeometry(1, 1, 1);
     camera.getWorldDirection(_v);
     mats.forEach((m, i) => {
-      const bg = batchGeometry(box, 1);
+      const bg = batchGeometry(box, 1, 'concrete');
       const mesh = new THREE.InstancedMesh(bg.geometry, m, 1);
       mesh.setMatrixAt(
         0,
@@ -607,8 +625,38 @@ export class DestructionSystem {
       mesh.receiveShadow = true;
       g.add(mesh);
     });
-    g.add(this.structure.pool.prewarmGroup());
     return g;
+  }
+
+  /** Top of the standing floor slab under a point inside a building (debris rests there). */
+  private floorUnder(x: number, y: number, z: number, out: { y: number; slab: number }) {
+    const H = config.construction.floorHeight;
+    const s = this.city.store;
+    this.city.forEachBuildingNear(x, y, z, 0, (b) => {
+      if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1 || y <= H) return;
+      let i = 0;
+      while (i < b.ncx - 2 && x > b.posX[i + 1]!) i++;
+      let j = 0;
+      while (j < b.ncz - 2 && z > b.posZ[j + 1]!) j++;
+      for (let f = Math.min(b.floors, Math.floor(y / H)) - 1; f >= 0; f--) {
+        const slab = b.slabId(f, i, j);
+        if (s.isStatic(slab)) {
+          const top = (f + 1) * H;
+          if (top > out.y) {
+            out.y = top;
+            out.slab = slab;
+          }
+          return;
+        }
+      }
+    });
+  }
+
+  /** Blows out the windows of one panel (fire heat), as the sonic boom does. */
+  breakWindow(id: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id) || s.kind[id] !== KIND.panel || s.flags[id]! & FLAG.parapet) return;
+    this.shatterWindows(s.cx[id]!, s.cy[id]!, s.cz[id]!, 0.2);
   }
 
   /** Low sonic pass: windows along the route blow out (DESIGN.md §6.5). */
