@@ -23,6 +23,11 @@ export class Synth {
   private breathGain!: GainNode;
   private chargeGain!: GainNode;
   private chargeOsc!: OscillatorNode;
+  private novaRumble!: GainNode;
+  private novaWhine!: GainNode;
+  private novaOsc!: OscillatorNode;
+  /** Effects stay ducked until this audio time (the Nova's silence beat). */
+  private duckUntil = 0;
 
   constructor() {
     const start = () => this.start();
@@ -48,6 +53,7 @@ export class Synth {
     events.on('player:tunnelExit', () => this.tunnelExit());
     events.on('player:tunnelCrash', () => this.tunnelCrash());
     events.on('power:energyThrow', (e) => this.energyThrow(e.charge));
+    events.on('nova:release', () => this.novaRelease());
     events.on('power:energyBlast', (e) => this.energyBlast(e.x, e.y, e.z, e.charge));
   }
 
@@ -152,6 +158,72 @@ export class Synth {
     this.chargeGain.gain.value = 0;
     this.chargeOsc.connect(cl).connect(this.chargeGain).connect(this.fxBus);
     this.chargeOsc.start();
+    // Nova wind-up: a low rumble building into a high whine.
+    const rs = ctx.createBufferSource();
+    rs.buffer = this.noise;
+    rs.loop = true;
+    rs.playbackRate.value = 0.35;
+    const rl = ctx.createBiquadFilter();
+    rl.type = 'lowpass';
+    rl.frequency.value = 120;
+    this.novaRumble = ctx.createGain();
+    this.novaRumble.gain.value = 0;
+    rs.connect(rl).connect(this.novaRumble).connect(this.fxBus);
+    rs.start(0, 0.4);
+    this.novaOsc = ctx.createOscillator();
+    this.novaOsc.type = 'sine';
+    this.novaOsc.frequency.value = 400;
+    this.novaWhine = ctx.createGain();
+    this.novaWhine.gain.value = 0;
+    this.novaOsc.connect(this.novaWhine).connect(this.fxBus);
+    this.novaOsc.start();
+  }
+
+  /** Per frame: the Nova wind-up (0..1). */
+  setNova(windup: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    this.novaRumble.gain.setTargetAtTime(windup > 0 ? 0.4 + 1.1 * windup : 0, t, 0.08);
+    this.novaWhine.gain.setTargetAtTime(windup > 0.3 ? 0.12 * windup * windup : 0, t, 0.05);
+    this.novaOsc.frequency.setTargetAtTime(400 + 2600 * windup * windup, t, 0.05);
+  }
+
+  /**
+   * The Nova goes off: near-silence under the flash, then the roar, then ringing ears with the
+   * world muffled for a few seconds (DESIGN.md §6.6).
+   */
+  private novaRelease() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const ring = config.nova.tinnitus;
+    this.novaRumble.gain.cancelScheduledValues(t);
+    this.novaRumble.gain.setValueAtTime(0, t);
+    this.novaWhine.gain.cancelScheduledValues(t);
+    this.novaWhine.gain.setValueAtTime(0, t);
+    // Near-silence, then the roar arrives.
+    this.fxBus.gain.cancelScheduledValues(t);
+    this.fxBus.gain.setValueAtTime(0.05, t);
+    const r = t + 0.45;
+    this.duckUntil = r;
+    this.noiseBurst(r, 0.25, 'highpass', 500, 1);
+    this.noiseBurst(r, 7, 'lowpass', 700, 1);
+    this.tone(r, 6, 55, 18, 1);
+    this.noiseBurst(r + 0.8, 12, 'lowpass', 160, 0.8);
+    // Ringing ears and a muffled world.
+    const o = ctx.createOscillator();
+    o.frequency.value = 4700;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, r);
+    g.gain.exponentialRampToValueAtTime(0.06, r + 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, r + ring);
+    o.connect(g).connect(this.master);
+    o.start(r);
+    o.stop(r + ring + 0.1);
+    this.muffle.frequency.cancelScheduledValues(t);
+    this.muffle.frequency.setValueAtTime(350, r);
+    this.muffle.frequency.setTargetAtTime(22000, r + ring * 0.5, ring * 0.25);
   }
 
   /** Per frame: the energy-ball charge whine (pitch rises with charge). */
@@ -287,7 +359,8 @@ export class Synth {
     if (!ctx) return;
     const a = config.audio;
     this.master.gain.setTargetAtTime(a.enabled ? a.masterVolume : 0, ctx.currentTime, 0.05);
-    this.fxBus.gain.setTargetAtTime(a.effectsVolume, ctx.currentTime, 0.05);
+    if (ctx.currentTime >= this.duckUntil)
+      this.fxBus.gain.setTargetAtTime(a.effectsVolume, ctx.currentTime, 0.05);
     const k = Math.min(
       1,
       Math.max(0, (speed - a.windStartSpeed) / (a.windFullSpeed - a.windStartSpeed)),

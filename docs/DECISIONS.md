@@ -168,3 +168,40 @@ Judgment calls the spec doesn't cover, one line of reasoning each. Newest at the
   - **Look:** a white-blue plasma ball (crackling core, soft halo) grows in his hands while he holds it out in front of him; a trail of sparks follows it in flight. The burst is a swelling flash, two shockwave rings, a dust ring and a shower of sparks.
   - **Feedback:** the aim camera is used while charging, a charge bar appears with the other power meters (it glows at full charge), and the audio is a rising whine, a throw whoosh, and a crack-and-boom heard with travel delay.
 - **Known issue: one early warm-up stall grew from ~450 ms (M3) to ~570 ms** with the M4 meshes. It lands about a second after the game becomes playable, during the background shader warm-up, and the M1 walk check in the smoke test sometimes measured it, so that test now waits for the warm-up like the M4 and perf tests do. Tracing which pipeline compiles synchronously is part of the M11 optimisation pass that already owns the M2 collapse stall.
+
+## M8: Nova blast (built before M5–M7, at the user's request)
+
+- **M8 was built straight after M4.** M5–M7 (people, ragdolls, response) don't exist yet, so the parts of §6.6 that act on them are hooks for later: people vaporized, flung or fleeing, cars lifting, flipping and setting off alarms, and response heat jumping to maximum. `nova:windup` / `nova:release` / `nova:done` events carry what those systems will need.
+- **Charge meter fills from property damage only**, from empty to full at $60 M (tunable). In the smoke tests a few minutes of heavy destruction makes $30–60 M. Casualties add to it once people exist (M5). The Nova's own damage doesn't refill it. The debug panel has "Fill Nova meter", and `nova.requireFullMeter` off lets it fire any time.
+- **Wind-up (hold R, 2.5 s):**
+  - Letting go early cancels it and keeps the charge. He's locked in a hover, so movement can't cancel it (§6.6).
+  - Pose: curled in, fists clenched. His suit seams light up first, then the whole suit glows. A rippling hot aura forms around him.
+  - Loose debris within 45 m lifts and swirls around him. Cracks spread on the ground below in five stages.
+  - The city's window lights flicker (one new uniform on the window shader), colour drains to 20%, the shake rises, and the audio builds from a low rumble to a high whine.
+- **Release:**
+  - A white-out flash (in a new colour-grade stage of the post chain, before tone mapping) holds for 0.3 s, then recovers over 1.4 s.
+  - The shockwave front expands at 250 m/s to 200 m, drawn as a dome riding the front. A ground shockwave ring and dust rolling out along the streets follow it.
+  - The fireball swells to a fifth of the radius and cools away over 4 s.
+  - Audio: near-silence under the flash, then the roar, then 6 s of ringing ears with the world muffled.
+- **Damage zones applied as the front reaches each piece** (fractions of the radius, as in the spec):
+  - **Core (0–25%):** pieces are deleted with no simulation. A building wholly inside the core goes in one call. Every 30 vaporized pieces make an ash-and-dust burst with glowing fragments.
+  - **Blast (25–65%):** every piece is torn loose and scorched. 15% fly outward (up to 70 m/s at the core edge) as visual debris; the rest drop straight into rubble on the ground below.
+  - **Edge (65–100%):** all glass goes. 80% of facade panels are stripped (falling to 40% at the radius), and the rest crack, scorch and lose their windows. Columns take up to 90% of their HP (none at the radius), so supports fail and sections collapse after the usual delay. Power is cut, and up to 14 rooms per building catch fire.
+  - **Fringe (100–150%):** windows blown in.
+- **Bulk destruction path:** the Nova removes pieces through new quiet methods (`vaporizeBuilding`, `vaporizePiece`, `tearLoose`, `bulkDamage`, `bulkShatter`). They skip per-piece dust, sound, events and furnishing, and announce the damage bill once per step. Per-piece effects at this scale (~29,000 pieces) would swamp the particle, audio and furnishing systems.
+- **Performance rules (§6.6), as built:**
+  - The core never simulates pieces.
+  - The front's work is time-boxed: 6 ms of each rendered frame, however many physics steps it runs. On a slow machine the destruction lags slightly behind the visible front instead of dragging the frame rate down.
+  - The Nova makes no rigid bodies: flung pieces are visual debris that become rubble where they land (§6.6: "short-lived visual debris (simple ballistic motion, no collision)"). The first version used rigid bodies; physics alone then cost 66 ms a frame on this laptop.
+- **Supporting fixes found while measuring the Nova:**
+  - Rubble capacity now starts at 80,000 (was 20,000). Growing it creates a new instanced mesh mid-play, which three.js compiles: a 100–300 ms stall. One Nova makes 25–30 k rubble chunks.
+  - Building piece batches now upload only the slots that changed, instead of the whole live range (~3 MB a frame at 26 k pieces).
+  - Flying fragments re-query the floor under them every 6 steps (or when about to land or moved sideways), not every step, and their spin step is precomputed.
+  - Falling-section mesh pool raised from 6 to 12: a Nova's edge zone drops 6–9 sections at once, and every one past the pool is created (and compiled) mid-play.
+- **Crater:** a deformed crater (the M2 ground crater, 30 m at ground level, shrinking as he goes higher, none above a quarter of the radius), road chunks around the rim, and a glowing disc that cools over 4 minutes.
+- **Mushroom cloud:** 320 soft billboards, each placed by a closed-form function of time, so it costs no simulation. The stem flows up into a cap that rolls over as a torus and spreads to 55% of the radius at 160% of the radius up (320 m for the default Nova), with a dust skirt at the base. It glows orange-white at first and cools to grey-brown smoke lit from above, drifts with the wind, hangs for 3 minutes, then thins over 1. From across the city (420 m out) it reads clearly over the skyline.
+- **Aftermath:** ash falls around the camera for 90 s. An orange-grey cast with 45% less colour fades back over 2 minutes. The sky and sun are left alone, because re-baking the sky lighting stalls ~0.6 s (an M3 known issue).
+- **Perf on this laptop (far below the reference RTX 3060):** steady play on the default perf path is unchanged at 25 fps. During a default 200 m Nova over downtown, frames average 114 ms (~9 fps) for the ~7 s the front takes to work through everything, with spikes of 300–380 ms. The slowest physics step is 31 ms. That is well short of the §13 target (30 fps on the reference hardware), which can't be measured here. What's left is spread across rendering (~32 ms of CPU at 1.6 M triangles), the remaining visual debris and physics. A smaller `nova.radius` is the main dial for this machine. Tracing the spikes is part of the M11 optimisation pass.
+- **Known issues:**
+  - The wind-up camera doesn't pull back, so the aura and debris crowd the view at the default distance.
+  - Buildings in the edge zone often topple into their neighbours for a while after the front passes, adding to the load.

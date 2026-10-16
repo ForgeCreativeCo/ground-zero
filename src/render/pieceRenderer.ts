@@ -4,7 +4,7 @@ import { Rng } from '../core/rng';
 import type { CityStructure } from '../destruction/cityStructure';
 import { FLAG, KIND, MAT, STATE } from '../destruction/pieces';
 import { BuildingProxies } from './buildingProxies';
-import { uploadLive } from './uploadRange';
+import { uploadSlots } from './uploadRange';
 import {
   batchGeometry,
   createFrameGeometry,
@@ -57,6 +57,7 @@ class Batch {
 
   add(piece: number, m: THREE.Matrix4, r: number, g: number, b: number, visual: number): number {
     const slot = this.count++;
+    this.touch(slot);
     this.mesh.setMatrixAt(slot, m);
     this.tint.setXYZ(slot, r, g, b);
     this.state.setXYZW(slot, 0, 0, 0, 0);
@@ -70,6 +71,7 @@ class Batch {
   remove(slot: number): number {
     const last = --this.count;
     this.dirty = true;
+    this.touch(slot);
     if (slot === last) {
       this.slotPiece[slot] = -1;
       return -1;
@@ -98,11 +100,33 @@ class Batch {
     return moved;
   }
 
+  /** Slots changed since the last flush: only that range is uploaded (a whole batch is MBs). */
+  private dirtyMin = Infinity;
+  private dirtyMax = -1;
+
+  /** Marks a slot changed (anything that writes a slot's data must call this). */
+  touch(slot: number) {
+    if (slot < this.dirtyMin) this.dirtyMin = slot;
+    if (slot > this.dirtyMax) this.dirtyMax = slot;
+    this.dirty = true;
+  }
+
   flush() {
     if (!this.dirty) return;
     this.dirty = false;
     this.mesh.count = this.count;
-    uploadLive(this.count, this.mesh.instanceMatrix, this.tint, this.state, this.room, this.visual);
+    const last = Math.min(this.dirtyMax, this.count - 1);
+    uploadSlots(
+      this.dirtyMin,
+      last,
+      this.mesh.instanceMatrix,
+      this.tint,
+      this.state,
+      this.room,
+      this.visual,
+    );
+    this.dirtyMin = Infinity;
+    this.dirtyMax = -1;
   }
 }
 
@@ -310,12 +334,15 @@ export class PieceRenderer {
       this.roomInfo(id, _room);
       batch.room.setXYZW(this.pieceSlot[id]!, _room[0]!, _room[1]!, _room[2]!, _room[3]!);
     }
-    batch.dirty = true;
+    batch.touch(this.pieceSlot[id]!);
   }
 
   /** Forces every batch to re-upload its count and data on the next flush. */
   markAllDirty() {
-    for (const b of this.batches) b.dirty = true;
+    for (const b of this.batches) {
+      b.touch(0);
+      b.touch(Math.max(0, b.count - 1));
+    }
   }
 
   flush() {

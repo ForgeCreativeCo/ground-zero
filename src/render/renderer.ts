@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { pass } from 'three/tsl';
+import { dot, mix, pass, uniform, vec3, vec4 } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { config } from '../config';
 import type { ToneMappingName } from '../config/render';
@@ -12,7 +12,10 @@ const TONE_MAPPINGS: Record<ToneMappingName, THREE.ToneMapping> = {
   Neutral: THREE.NeutralToneMapping,
 };
 
-/** WebGPU renderer (WebGL2 fallback) + TSL post chain: scene pass -> bloom -> tone map. */
+/**
+ * WebGPU renderer (WebGL2 fallback) + TSL post chain: scene pass -> bloom -> grade -> tone map.
+ * The grade is for big moments (the Nova): a white-out flash, draining colour, a tint.
+ */
 export class GameRenderer {
   readonly renderer: THREE.WebGPURenderer;
   readonly camera: THREE.PerspectiveCamera;
@@ -22,6 +25,12 @@ export class GameRenderer {
   private lastW = 0;
   private lastH = 0;
   private lastPixelRatio = 0;
+  /** Colour grade (linear HDR, before tone mapping): 0..1 saturation, rgb tint, flash 0..1. */
+  readonly grade = {
+    saturation: uniform(1),
+    tint: uniform(new THREE.Color(1, 1, 1)),
+    flash: uniform(0),
+  };
 
   constructor(
     readonly canvasParent: HTMLElement,
@@ -53,12 +62,16 @@ export class GameRenderer {
     const scenePass = pass(this.scene, this.camera, { samples: c.msaaSamples });
     this.scenePass = scenePass;
     const color = scenePass.getTextureNode('output');
+    let out = color.rgb;
     if (c.bloom.enabled) {
       this.bloomNode = bloom(color, c.bloom.strength, c.bloom.radius, c.bloom.threshold);
-      this.pipeline.outputNode = color.add(this.bloomNode);
-    } else {
-      this.pipeline.outputNode = color;
+      out = color.add(this.bloomNode).rgb;
     }
+    const g = this.grade;
+    const luma = dot(out, vec3(0.2126, 0.7152, 0.0722));
+    const graded = mix(vec3(luma, luma, luma), out, g.saturation).mul(g.tint);
+    // The flash burns everything to white (well above 1, so it survives tone mapping).
+    this.pipeline.outputNode = vec4(mix(graded, vec3(40, 40, 40), g.flash), 1);
     this.syncSize();
   }
 

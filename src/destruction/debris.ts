@@ -9,7 +9,6 @@ import { uploadLive } from '../render/uploadRange';
 const _m = new THREE.Matrix4();
 const _p = new THREE.Vector3();
 const _q = new THREE.Quaternion();
-const _qa = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _e = new THREE.Euler();
 const _t = { x: 0, y: 0, z: 0 };
@@ -33,6 +32,8 @@ export interface DebrisItem {
   /** Visual-only motion. */
   vel: THREE.Vector3;
   spin: THREE.Vector3;
+  /** One fixed step of spin as a rotation (visual fragments; cheaper than an Euler per step). */
+  spinQ: THREE.Quaternion;
   age: number;
   sleep: number;
   /** Seconds left counting as thrown (impacts deal damage). */
@@ -50,6 +51,12 @@ export interface DebrisItem {
   /** Resting on an upper floor (a slab piece id) rather than the ground; -1 if not. */
   restSlab: number;
   parked: boolean;
+  /** Visual fragments cache the floor under them (re-queried every few steps, or near it). */
+  floorY: number;
+  floorSlab: number;
+  floorX: number;
+  floorZ: number;
+  floorAge: number;
 }
 
 /** Chunks use the plain (window-less) panel looks. */
@@ -358,6 +365,7 @@ export class DebrisSystem {
     it.prevQuat.copy(q);
     it.vel.set(vx, vy, vz);
     it.spin.set(this.rng.range(-4, 4), this.rng.range(-4, 4), this.rng.range(-4, 4));
+    it.spinQ.setFromEuler(_e.set(it.spin.x / 60, it.spin.y / 60, it.spin.z / 60));
     it.age = 0;
     it.sleep = 0;
     it.thrown = 0;
@@ -366,6 +374,7 @@ export class DebrisSystem {
     it.hitCooldown = 0;
     it.restSlab = -1;
     it.parked = false;
+    it.floorAge = 0;
     it.live = true;
     it.body = null;
     it.collider = null;
@@ -400,6 +409,7 @@ export class DebrisSystem {
       prevQuat: new THREE.Quaternion(),
       vel: new THREE.Vector3(),
       spin: new THREE.Vector3(),
+      spinQ: new THREE.Quaternion(),
       age: 0,
       sleep: 0,
       thrown: 0,
@@ -411,6 +421,11 @@ export class DebrisSystem {
       liveIdx: -1,
       restSlab: -1,
       parked: false,
+      floorY: 0,
+      floorSlab: -1,
+      floorX: 0,
+      floorZ: 0,
+      floorAge: 0,
     };
     this.items.push(it);
     return it;
@@ -526,12 +541,27 @@ export class DebrisSystem {
       // Visual fragment: ballistic, lands on the ground or a rubble pile.
       it.vel.y += g * dt;
       it.pos.addScaledVector(it.vel, dt);
-      _e.set(it.spin.x * dt, it.spin.y * dt, it.spin.z * dt);
-      it.quat.multiply(_qa.setFromEuler(_e));
-      const fl = this.restHeight(it.pos.x, it.pos.y + 0.5, it.pos.z);
+      it.quat.multiply(it.spinQ);
       const minHalf = Math.min(it.hx, it.hy, it.hz);
-      if (it.pos.y - minHalf <= fl.y) {
-        it.pos.y = fl.y + minHalf;
+      // The floor under it barely changes while it flies: look it up again every few steps, when
+      // it has moved sideways, or when it is about to land (thousands fly after a Nova).
+      if (
+        --it.floorAge <= 0 ||
+        Math.abs(it.pos.x - it.floorX) + Math.abs(it.pos.z - it.floorZ) > 3 ||
+        it.pos.y - minHalf - it.floorY < Math.abs(it.vel.y) * dt * 3 + 0.5
+      ) {
+        const f = this.restHeight(it.pos.x, it.pos.y + 0.5, it.pos.z);
+        it.floorY = f.y;
+        it.floorSlab = f.slab;
+        it.floorX = it.pos.x;
+        it.floorZ = it.pos.z;
+        it.floorAge = 6;
+      }
+      if (it.pos.y - minHalf <= it.floorY) {
+        it.pos.y = it.floorY + minHalf;
+        const fl = this.floorHit;
+        fl.y = it.floorY;
+        fl.slab = it.floorSlab;
         if (Math.max(it.hx, it.hy, it.hz) < s.minBodySize) it.fade = s.smallFadeTime;
         else if (fl.slab >= 0) this.park(it, fl);
         else this.toRubble(it, true);

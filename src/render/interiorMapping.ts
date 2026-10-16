@@ -29,6 +29,8 @@ export const uWindowGlowNight = uniform(config.interiors.windowGlowNight);
 export const uLitDay = uniform(config.interiors.litDay);
 export const uLitNight = uniform(config.interiors.litNight);
 export const uRoomDepth = uniform(config.interiors.roomDepth);
+/** Multiplier on every lit window (the Nova wind-up flickers the city's lights). */
+export const uLightFlicker = uniform(1);
 
 /** Updates the shared uniforms (call once per frame). */
 export function updateInteriorUniforms(sunElevationDeg: number) {
@@ -124,7 +126,7 @@ export function roomRadiance(r: RoomInputs) {
     select(r.power.greaterThan(0.25), flick, float(0)),
   );
   const lit = switchedOn.mul(powered);
-  const glow = mix(uWindowGlowDay, uWindowGlowNight, nightFactor);
+  const glow = mix(uWindowGlowDay, uWindowGlowNight, nightFactor).mul(uLightFlicker);
   // Light falls off toward the back of the room.
   const falloff = mix(1, 0.55, hz.div(D));
   const daylight = mix(float(0.18), float(0.012), nightFactor); // unlit rooms: what spills in from outside

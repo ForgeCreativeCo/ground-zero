@@ -63,6 +63,12 @@ export interface GameEvents {
   'damage:bill': { total: number };
   /** Heat vision filled its overheat meter (forced cooldown). */
   'power:overheat': Record<string, never>;
+  /** Nova (DESIGN.md §6.6): wind-up started, cancelled (let go early), went off (response heat jumps to max in M7). */
+  'nova:windup': { x: number; y: number; z: number };
+  'nova:cancel': Record<string, never>;
+  'nova:release': { x: number; y: number; z: number; radius: number };
+  /** The Nova's front finished passing through everything it caught. */
+  'nova:done': { destroyed: number; vaporizedBuildings: number };
   /** Energy ball thrown, and where it burst (radius m, charge 0..1). */
   'power:energyThrow': { charge: number };
   'power:energyBlast': { x: number; y: number; z: number; radius: number; charge: number };

@@ -74,7 +74,7 @@ export const structure = {
   /** Instances per pooled falling-section mesh (a tallest-tower section is ~5k pieces). */
   clusterMeshCapacity: 8000,
   /** Pooled falling-section meshes (more simultaneous sections create meshes mid-play). */
-  clusterMeshPool: 6,
+  clusterMeshPool: 12,
 };
 
 /** Debris lifecycle (DESIGN.md §7.8). */
@@ -91,7 +91,7 @@ export const debris = {
   /** Pieces that become rubble directly (crushed) shrink to this fraction of their size. */
   rubbleScale: 0.6,
   /** Rubble instance capacity (grows as needed). */
-  rubbleInitialCapacity: 20000,
+  rubbleInitialCapacity: 80000,
   /** Most rigid bodies created per physics step; extra fragments fly as visual debris. */
   maxNewBodiesPerStep: 40,
   /** Fragment speeds when a piece is blown out (m/s per unit of push). */

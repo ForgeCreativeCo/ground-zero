@@ -181,6 +181,18 @@ export function installTestHooks(game: Game) {
       frozenPieces: game.destruction.frozenSet.size,
       decals: game.effects.decals.count,
     }),
+    /** Nova state (M8). */
+    nova: () => ({
+      ...game.nova.stats,
+      meter: game.nova.meter,
+      phase: game.nova.phase,
+      windup: game.nova.windupK,
+      front: game.nova.front,
+      radius: game.nova.radius,
+      locked: game.player.locked,
+      cloud: game.novaFx.cloud.active,
+    }),
+    fillNova: () => game.nova.fill(),
     /** Temperature (°C) and frozen seconds of a piece. */
     pieceThermal: (id: number) => {
       const s = game.destruction.city.store;

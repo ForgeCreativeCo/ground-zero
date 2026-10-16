@@ -66,6 +66,8 @@ export class PlayerController {
   penetrator: Penetrator | null = null;
   /** Going through buildings this step (sonic, flying). */
   penetrating = false;
+  /** Held in a hover, ignoring input (the Nova wind-up can't be cancelled by moving). */
+  locked = false;
 
   private body: RAPIER.RigidBody;
   private ray: RAPIER.Ray;
@@ -124,6 +126,18 @@ export class PlayerController {
     this.prevPosition.y = this.position.y;
     this.prevPosition.z = this.position.z;
     this.computeBasis();
+
+    if (this.locked) {
+      // Brought to a stop in the air and held there.
+      if (this.state !== 'flying') this.setState('flying');
+      const k = Math.exp(-8 * dt);
+      this.velocity.x *= k;
+      this.velocity.y *= k;
+      this.velocity.z *= k;
+      this.charging = false;
+      this.move(dt, false);
+      return;
+    }
 
     const mx = input ? input.move.x : 0;
     const my = input ? input.move.y : 0;

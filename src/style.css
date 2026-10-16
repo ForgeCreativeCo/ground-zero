@@ -269,3 +269,48 @@ body {
 #power-meters .meter[hidden] {
   display: none;
 }
+
+/* Nova charge (DESIGN.md §10.1): under the damage bill, glowing when full. */
+#hud .hud-nova {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 5px;
+}
+
+#hud .nova-track {
+  position: relative;
+  width: 140px;
+  height: 5px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#hud .nova-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: linear-gradient(90deg, #f2a33a, #ffe2a8);
+}
+
+#hud .hud-nova.full .nova-fill {
+  background: #fff4d6;
+  box-shadow: 0 0 8px #ffd27a;
+}
+
+#hud .hud-nova.full .hud-bill-label {
+  color: #ffd27a;
+  text-shadow: 0 0 6px #f2a33a;
+}
+
+#hud .hud-nova.windup .nova-track {
+  animation: meter-blink 0.18s steps(2) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #hud .hud-nova.windup .nova-track {
+    animation: none;
+  }
+}

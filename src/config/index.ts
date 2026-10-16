@@ -20,6 +20,7 @@ import { environmentMeta, moon, sky, sun } from './environment';
 import { fx, fxMeta } from './fx';
 import { fire, interiors, interiorsMeta, power } from './interiors';
 import { loop, loopMeta } from './loop';
+import { nova, novaMeta } from './nova';
 import { player, playerMeta } from './player';
 import { energyBall, flyThrough, freezeBreath, heatVision, powersMeta } from './powers';
 import type { MetaMap } from './meta';
@@ -58,6 +59,7 @@ const defaultsTree = {
   freezeBreath,
   energyBall,
   flyThrough,
+  nova,
   interiors,
   power,
   fire,
@@ -90,6 +92,7 @@ export const meta: MetaMap = {
   ...destructionMeta,
   ...interiorsMeta,
   ...powersMeta,
+  ...novaMeta,
   ...debugCameraMeta,
   ...controlsMeta,
   ...budgetsMeta,

@@ -401,7 +401,154 @@ export class DestructionSystem {
 
   addBill(id: number) {
     this.bill += this.city.store.volume(id) * this.mat(id).value;
+    if (this.quiet) this.billDirty = true;
+    else events.emit('damage:bill', { total: this.bill });
+  }
+
+  // --- bulk destruction (the Nova, DESIGN.md §6.6) ------------------------------------------
+  // Thousands of pieces a second: no per-piece effects, sounds or events (the caller makes the
+  // effects in bulk), the bill is announced once per step, and nothing gets furnished.
+
+  /** While true, bill changes are collected and announced by flushBill(). */
+  quiet = false;
+  private billDirty = false;
+
+  flushBill() {
+    if (!this.billDirty) return;
+    this.billDirty = false;
     events.emit('damage:bill', { total: this.bill });
+  }
+
+  /** Removes every standing piece of a building at once (vaporized). Returns how many. */
+  vaporizeBuilding(bi: number) {
+    const s = this.city.store;
+    const b = this.city.buildings[bi]!;
+    let n = 0;
+    for (let id = b.base; id < b.end; id++) {
+      if (!s.isStatic(id)) continue;
+      this.renderer.hide(id);
+      s.state[id] = STATE.destroyed;
+      s.hp[id] = 0;
+      this.bill += s.volume(id) * this.mat(id).value;
+      n++;
+    }
+    // Activating now shows nothing (every piece is gone) and hides the stand-in.
+    this.renderer.activate(bi);
+    this.piecesDestroyed += n;
+    this.billDirty = true;
+    this.colliders.markDirty(bi);
+    this.structure.markDirty(bi);
+    return n;
+  }
+
+  /** Removes one piece without a trace (the Nova's core vaporizes it). */
+  vaporizePiece(id: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id)) return false;
+    this.activate(s.building[id]!);
+    s.state[id] = STATE.destroyed;
+    s.hp[id] = 0;
+    this.renderer.hide(id);
+    this.addBill(id);
+    this.piecesDestroyed++;
+    this.colliders.markDirty(s.building[id]!);
+    this.structure.markDirty(s.building[id]!);
+    return true;
+  }
+
+  /**
+   * Tears a piece loose whole: it flies with velocity (vx, vy, vz) as a debris chunk, or, when
+   * `fly` is false or the debris budget is full, drops straight into the rubble below. With
+   * `body` false it flies as visual debris only (no rigid body, no collisions).
+   */
+  tearLoose(id: number, vx: number, vy: number, vz: number, fly: boolean, body = true) {
+    const s = this.city.store;
+    if (!s.isStatic(id)) return false;
+    this.activate(s.building[id]!);
+    s.state[id] = STATE.destroyed;
+    s.hp[id] = 0;
+    s.soot[id] = 0.8;
+    this.renderer.hide(id);
+    const v = this.renderer.visualFor(id, true);
+    let it: DebrisItem | null = null;
+    if (fly) {
+      _e.set(this.rng.range(-0.6, 0.6), this.rng.range(0, 6.28), this.rng.range(-0.6, 0.6));
+      it = this.debris.spawn(
+        v,
+        s.cx[id]!,
+        s.cy[id]!,
+        s.cz[id]!,
+        s.hx[id]!,
+        s.hy[id]!,
+        s.hz[id]!,
+        _q.setFromEuler(_e),
+        vx,
+        vy,
+        vz,
+        this.mat(id).density,
+        body,
+      );
+    }
+    if (!it) {
+      const sc = config.debris.rubbleScale;
+      const ground = this.debris.piles.heightAt(s.cx[id]!, s.cz[id]!);
+      this.debris.addRubble(
+        v,
+        s.cx[id]! + this.rng.range(-3, 3),
+        ground + s.hy[id]! * sc * 0.5,
+        s.cz[id]! + this.rng.range(-3, 3),
+        s.hx[id]! * sc,
+        s.hy[id]! * sc * 0.5,
+        s.hz[id]! * sc,
+        this.rng.range(0, 6.28),
+        0.3,
+      );
+      this.debris.piles.add(s.cx[id]!, s.cz[id]!, s.volume(id));
+    }
+    this.addBill(id);
+    this.piecesDestroyed++;
+    this.colliders.markDirty(s.building[id]!);
+    this.structure.markDirty(s.building[id]!);
+    return true;
+  }
+
+  /** Quiet damage: cracks and scorches, or tears the piece loose (flying) if it breaks. */
+  bulkDamage(id: number, amount: number, vx: number, vy: number, vz: number, soot: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id) || amount <= 0) return false;
+    this.activate(s.building[id]!);
+    s.hp[id] = Math.max(0, s.hp[id]! - amount);
+    s.soot[id] = Math.max(s.soot[id]!, soot);
+    const next = stateForHp(s.hp[id]! / s.maxHp[id]!, s.kind[id]!, config.damage);
+    if (next === STATE.destroyed) return this.tearLoose(id, vx, vy, vz, true);
+    if (next !== s.state[id]) {
+      s.state[id] = next;
+      if (next === STATE.breached) this.colliders.markDirty(s.building[id]!);
+      this.structure.markDirty(s.building[id]!);
+    }
+    this.renderer.show(id);
+    this.renderer.refresh(id);
+    return false;
+  }
+
+  /** Quiet window blow-out: glass panels shatter (breach), others lose their glazing. */
+  bulkShatter(id: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id) || s.kind[id] !== KIND.panel || s.flags[id]! & FLAG.parapet) return;
+    this.activate(s.building[id]!);
+    if (s.mat[id] === MAT.glass) {
+      if (s.state[id]! >= STATE.breached) return;
+      s.hp[id] = s.maxHp[id]! * config.damage.breachedAt * 0.99;
+      s.state[id] = STATE.breached;
+      this.colliders.markDirty(s.building[id]!);
+      this.bill += s.volume(id) * this.mat(id).value * 0.3;
+    } else {
+      if (s.flags[id]! & FLAG.windowsBroken) return;
+      s.flags[id]! |= FLAG.windowsBroken;
+      this.bill += 1800;
+    }
+    this.billDirty = true;
+    this.renderer.refresh(id);
   }
 
   /** Splits a piece into fragments (DESIGN.md §7.2 destroyed state). `share` < 1 for a breach. */

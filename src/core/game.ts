@@ -5,12 +5,14 @@ import { DestructionSystem } from '../destruction/destruction';
 import { HeatBeams } from '../fx/beams';
 import { Effects } from '../fx/effects';
 import { EnergyBallFx } from '../fx/energyBallFx';
+import { NovaFx } from '../fx/novaFx';
 import { FireSystem } from '../fx/fire';
 import { InteriorSystem } from '../interiors/interiorSystem';
 import { EnergyBall } from '../powers/energyBall';
 import { FlyThrough } from '../powers/flyThrough';
 import { FreezeBreath } from '../powers/freezeBreath';
 import { HeatVision } from '../powers/heatVision';
+import { Nova } from '../powers/nova';
 import { Strength } from '../powers/strength';
 import { Environment } from '../render/environment';
 import { updateInteriorUniforms } from '../render/interiorMapping';
@@ -75,6 +77,8 @@ export class Game {
   beams!: HeatBeams;
   energy!: EnergyBall;
   energyFx!: EnergyBallFx;
+  nova!: Nova;
+  novaFx!: NovaFx;
   perfHud!: PerfHud;
   speedometer!: Speedometer;
   debugPanel!: DebugPanel;
@@ -187,6 +191,10 @@ export class Game {
       this.player,
     );
     this.energyFx = new EnergyBallFx(this.scene, this.effects);
+    this.nova = new Nova(this.destruction, this.interiors, this.fire, this.player);
+    this.novaFx = new NovaFx(this.scene, this.effects, this.renderer);
+    this.novaFx.groundBelow = (x, y, z) => this.groundBelow(x, y, z);
+    events.on('nova:release', (e) => this.novaCrater(e.x, e.y, e.z, e.radius));
     this.effects.decals.pieceStanding = (id) => this.destruction.city.store.isStatic(id);
     events.on('player:tunnelEnter', () => (this.hitchTimer = config.flyThrough.hitchTime));
     console.log('[boot] destruction', (performance.now() - tD).toFixed(0), 'ms');
@@ -201,6 +209,7 @@ export class Game {
       toggleFullscreen: () => void toggleFullscreen(),
       cutStory: () => this.cutStoryUnderReticle(),
       startFire: () => this.fireUnderReticle(),
+      fillNova: () => this.nova.fill(),
       toggleNight: () => {
         config.sun.elevationDeg = config.sun.elevationDeg > 0 ? -12 : 38;
       },
@@ -287,6 +296,7 @@ export class Game {
     }
 
     this.input.update(time);
+    this.nova.beginFrame();
     if (this.input.action('debugPanel').pressed) this.debugPanel.toggle();
     if (this.input.action('perfHud').pressed) config.debug.showPerfHud = !config.debug.showPerfHud;
     this.onFrame?.(realDt);
@@ -348,7 +358,16 @@ export class Game {
     pose.landing = pl.landingTimer > 0;
     pose.diving = pl.diving;
     pose.boosting = this.input.action('boost').down && pl.state === 'flying';
-    pose.aim = this.heat.firing ? 1 : this.breath.firing ? 2 : this.energy.charging ? 3 : 0;
+    pose.aim =
+      this.nova.phase === 'windup'
+        ? 4
+        : this.heat.firing
+          ? 1
+          : this.breath.firing
+            ? 2
+            : this.energy.charging
+              ? 3
+              : 0;
     pose.lookPitch = this.rig.pitch;
     pose.action = this.strength.action;
     pose.actionT = this.strength.actionT;
@@ -386,6 +405,10 @@ export class Game {
       .addScaledVector(_fwd, 0.7 + br)
       .addScaledVector(_up, config.player.height * 0.66);
     this.energyFx.update(this.energy, cam, simDt);
+    this.hero.setNovaGlow(this.nova.windupK);
+    _center.set(this.heroPos.x, this.heroPos.y + config.player.height / 2, this.heroPos.z);
+    this.novaFx.update(this.nova, cam, _center, simDt);
+    this.synth.setNova(this.nova.windupK);
     this.heat.frameUpdate(simDt);
     this.breath.frameUpdate(simDt);
     this.hero.setEyeGlow(Math.max(this.heat.ramp, this.heat.meter.level * 0.15));
@@ -411,6 +434,7 @@ export class Game {
     this.interiors.update(simDt, this.heroPos, cam);
     this.fire.update(simDt, cam);
     this.hud.update(realDt, !config.debug.freeCamera && this.strength.inReach());
+    this.hud.novaMeter(this.nova.meter, this.nova.phase === 'windup');
     this.hud.meters(
       this.energy.charging ? Math.max(config.energyBall.minCharge, this.energy.charge) : -1,
       this.heat.meter.level,
@@ -442,6 +466,7 @@ export class Game {
     this.heat.fixedUpdate(input, dt);
     this.breath.fixedUpdate(input, dt);
     this.energy.fixedUpdate(input, dt);
+    this.nova.fixedUpdate(input, dt);
     if (this.player.speed >= config.player.sonicThreshold * 0.9) this.flyThrough.lookAhead(dt);
     this.physics.step();
     this.destruction.fixedUpdate(dt);
@@ -509,6 +534,42 @@ export class Game {
     });
   }
 
+  /** Height of the first solid surface below a point (ground, roof, rubble). */
+  groundBelow(x: number, y: number, z: number): number {
+    const ray = this.groundRay;
+    ray.origin = { x, y, z };
+    ray.dir = { x: 0, y: -1, z: 0 };
+    const hit = this.physics.world.castRay(
+      ray,
+      2000,
+      true,
+      this.physics.R.QueryFilterFlags.EXCLUDE_DYNAMIC,
+      undefined,
+      this.player.playerCollider,
+    );
+    return hit ? y - hit.timeOfImpact : 0;
+  }
+
+  private _groundRay: InstanceType<Physics['R']['Ray']> | null = null;
+  private get groundRay() {
+    return (this._groundRay ??= new this.physics.R.Ray(
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: -1, z: 0 },
+    ));
+  }
+
+  /** The Nova leaves a crater when it goes off near the ground (DESIGN.md §6.6). */
+  private novaCrater(x: number, y: number, z: number, radius: number) {
+    const c = config.nova;
+    const ground = this.groundBelow(x, y, z);
+    const k = 1 - (y - ground) / Math.max(1, radius * c.coreFraction);
+    if (k <= 0 || ground > 1.5) return;
+    const r = c.craterRadius * (0.4 + 0.6 * k);
+    this.ground.addCrater(x, z, r, c.craterDepth * k);
+    this.effects.craters.add(x, ground, z, r * 1.3);
+    this.destruction.roadChunks(x, z, r, 24);
+  }
+
   /** Debug tool: set fire to whatever is under the reticle. */
   fireUnderReticle(): boolean {
     const cam = this.renderer.camera;
@@ -565,7 +626,7 @@ export class Game {
     s.drawCalls = info.render.drawCalls;
     s.triangles = info.render.triangles;
     s.simSteps = this.simLoop.lastSteps;
-    s.particles = this.effects.particleCount + this.fire.particleCount;
+    s.particles = this.effects.particleCount + this.fire.particleCount + this.novaFx.particleCount;
     s.decals = this.effects.decalCount;
     const ds = this.destruction.stats();
     s.piecesShown = ds.shown;

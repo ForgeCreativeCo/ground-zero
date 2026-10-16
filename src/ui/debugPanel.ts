@@ -14,6 +14,7 @@ export interface DebugActions {
   /** Cut every column of the story under the reticle (structural test). */
   cutStory(): boolean;
   startFire(): boolean;
+  fillNova(): void;
   toggleNight(): void;
 }
 
@@ -62,6 +63,7 @@ export class DebugPanel {
     f.addButton({ title: 'Reset camera' }).on('click', () => actions.resetCamera());
     f.addButton({ title: 'Cut supports under reticle' }).on('click', () => actions.cutStory());
     f.addButton({ title: 'Start fire under reticle' }).on('click', () => actions.startFire());
+    f.addButton({ title: 'Fill Nova meter' }).on('click', () => actions.fillNova());
     f.addButton({ title: 'Toggle day / night' }).on('click', () => actions.toggleNight());
 
     const tp = { x: 0, y: 50, z: 0 };

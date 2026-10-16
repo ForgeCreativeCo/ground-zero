@@ -19,12 +19,16 @@ export class Hud {
   private chargeEl: HTMLDivElement;
   private chargeFill: HTMLDivElement;
   private meterKey = '';
+  private nova: HTMLDivElement;
+  private novaFill: HTMLSpanElement;
+  private novaKey = '';
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
     this.root.id = 'hud';
     this.root.innerHTML =
-      '<div class="hud-bill"><span class="hud-bill-label">DAMAGE</span><span class="hud-bill-value">$0</span></div>';
+      '<div class="hud-bill"><span class="hud-bill-label">DAMAGE</span><span class="hud-bill-value">$0</span></div>' +
+      '<div class="hud-nova"><span class="hud-bill-label">NOVA</span><span class="nova-track"><span class="nova-fill"></span></span></div>';
     this.reticle = document.createElement('div');
     this.reticle.id = 'reticle';
     this.meterRoot = document.createElement('div');
@@ -41,6 +45,8 @@ export class Hud {
     this.chargeEl = this.meterRoot.querySelector('.charge')!;
     this.chargeFill = this.chargeEl.querySelector('.meter-fill')!;
     this.bill = this.root.querySelector('.hud-bill-value')!;
+    this.nova = this.root.querySelector('.hud-nova')!;
+    this.novaFill = this.root.querySelector('.nova-fill')!;
     events.on('damage:bill', ({ total }) => (this.target = total));
   }
 
@@ -52,6 +58,16 @@ export class Hud {
       this.bill.textContent = formatDollars(this.shown);
     }
     this.reticle.classList.toggle('reach', targetInReach);
+  }
+
+  /** Nova charge 0..1 (glows when full, pulses during the wind-up). */
+  novaMeter(level: number, windup: boolean) {
+    const key = `${Math.round(level * 300)}|${windup}`;
+    if (key === this.novaKey) return;
+    this.novaKey = key;
+    this.novaFill.style.width = `${(level * 100).toFixed(1)}%`;
+    this.nova.classList.toggle('full', level >= 1);
+    this.nova.classList.toggle('windup', windup);
   }
 
   /**

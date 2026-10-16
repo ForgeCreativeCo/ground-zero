@@ -405,6 +405,12 @@ export class InteriorSystem {
     this.outages.set(bi, { origin: b.floorOf(columnId), start: this.time });
   }
 
+  /** Cuts a building's power from a floor outward (the Nova's edge zone). */
+  cutPower(bi: number, floor: number) {
+    if (this.outages.has(bi)) return;
+    this.outages.set(bi, { origin: floor, start: this.time });
+  }
+
   /** 1 = powered, 0.5 = flickering (outage front), 0 = dark. */
   floorPower(bi: number, f: number): number {
     const o = this.outages.get(bi);

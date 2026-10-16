@@ -15,3 +15,18 @@ export function uploadLive(
     attr.needsUpdate = true;
   }
 }
+
+/** Marks instances [first, last] (inclusive) of instanced attributes for upload. */
+export function uploadSlots(
+  first: number,
+  last: number,
+  ...attrs: (THREE.BufferAttribute | THREE.InterleavedBufferAttribute)[]
+) {
+  if (last < first) return;
+  for (const a of attrs) {
+    const attr = a as THREE.BufferAttribute;
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(first * attr.itemSize, (last - first + 1) * attr.itemSize);
+    attr.needsUpdate = true;
+  }
+}

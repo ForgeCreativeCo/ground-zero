@@ -1,5 +1,14 @@
 import * as THREE from 'three/webgpu';
-import { color, uniform, vec3 } from 'three/tsl';
+import {
+  abs,
+  color,
+  float,
+  fract,
+  positionLocal,
+  smoothstep as nodeSmoothstep,
+  uniform,
+  vec3,
+} from 'three/tsl';
 import { config } from '../config';
 import { smoothstep } from './flightModel';
 
@@ -56,7 +65,10 @@ export interface HeroPoseInput {
   landing: boolean;
   diving: boolean;
   boosting: boolean;
-  /** Power stance: 0 none, 1 heat vision, 2 freeze breath (DESIGN.md §3), 3 charging an energy ball. */
+  /**
+   * Power stance: 0 none, 1 heat vision, 2 freeze breath (DESIGN.md §3), 3 charging an energy
+   * ball, 4 Nova wind-up.
+   */
   aim: number;
   /** Camera pitch (the head follows it while aiming). */
   lookPitch: number;
@@ -93,6 +105,8 @@ export class HeroModel {
   readonly suit: THREE.MeshStandardNodeMaterial;
   /** Eye glow (heat vision charging/firing, DESIGN.md §3), 0..1. */
   private eyeGlow = uniform(0);
+  /** Nova wind-up: an inner glow through his body and suit seams, 0..1. */
+  private novaGlow = uniform(0);
   private eyes: THREE.Mesh[] = [];
 
   constructor(scene: THREE.Scene) {
@@ -101,6 +115,10 @@ export class HeroModel {
       roughness: 0.62,
       metalness: 0.18,
     });
+    // Seams: thin bands around each limb that light up first, then the whole suit glows.
+    const seam = float(1).sub(nodeSmoothstep(0, 0.06, abs(fract(positionLocal.y.mul(5)).sub(0.5))));
+    const g = this.novaGlow;
+    this.suit.emissiveNode = color(0xffc070).mul(seam.mul(g.mul(7)).add(g.mul(g).mul(g).mul(1.5)));
     const skin = this.suit;
     const h = config.player.height;
     this.body.position.y = -h / 2;
@@ -254,6 +272,21 @@ export class HeroModel {
    * Energy ball: both hands out in front, cupped around it.
    */
   private applyStance(s: HeroPoseInput) {
+    if (s.aim === 4) {
+      // Nova wind-up: curled in, fists clenched, gathering it, head bowed.
+      this.set('spine', -0.35);
+      this.set('chest', -0.15);
+      this.set('neck', -0.2);
+      this.set('shoulderR', 0.9, 0.5, -0.5);
+      this.set('shoulderL', 0.9, -0.5, 0.5);
+      this.set('elbowR', 2.1);
+      this.set('elbowL', 2.1);
+      this.set('hipL', 0.9, 0, 0.1);
+      this.set('kneeL', -1.6);
+      this.set('hipR', 0.7, 0, -0.1);
+      this.set('kneeR', -1.4);
+      return;
+    }
     if (s.aim === 0 || this.flyBlend > 0.6) return;
     const pitch = THREE.MathUtils.clamp(s.lookPitch, -1.1, 0.9);
     if (s.aim === 1) {
@@ -281,6 +314,11 @@ export class HeroModel {
       this.set('shoulderR', 0.1, 0, -0.35);
       this.set('shoulderL', 0.1, 0, 0.35);
     }
+  }
+
+  /** Nova wind-up glow (0..1). */
+  setNovaGlow(k: number) {
+    this.novaGlow.value = k;
   }
 
   /** Glow of the eyes (0..1). */
