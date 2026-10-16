@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { config } from '../config';
 import { events } from '../core/events';
 import { Craters } from './craters';
+import { SurfaceDecals } from './decals';
 import { Dust } from './dust';
 import { Shockwaves } from './shockwaves';
 import { SpeedLines } from './speedLines';
@@ -20,6 +21,13 @@ export class Effects {
   readonly shockwaves: Shockwaves;
   readonly vapor: VaporCone;
   readonly speedLines: SpeedLines;
+  /** Heat-vision sparks and molten droplets at the beam impact (DESIGN.md §6.2). */
+  readonly sparks: Dust;
+  readonly droplets: Dust;
+  /** Freeze-breath mist (DESIGN.md §6.3). */
+  readonly frostMist: Dust;
+  /** Heat scars and frost patches. */
+  readonly decals: SurfaceDecals;
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.dust = new Dust(scene);
@@ -35,6 +43,37 @@ export class Effects {
     this.shockwaves = new Shockwaves(scene);
     this.vapor = new VaporCone(scene);
     this.speedLines = new SpeedLines(camera);
+    this.sparks = new Dust(scene, {
+      capacity: () => 1500,
+      color: () => '#ffb050',
+      lifetime: () => 0.45,
+      drag: () => 1.5,
+      opacity: 1,
+      lift: () => -14,
+      additive: true,
+      brightness: 6,
+      flicker: true,
+    });
+    this.droplets = new Dust(scene, {
+      capacity: () => 600,
+      color: () => '#ff6a14',
+      lifetime: () => 1.4,
+      drag: () => 0.4,
+      opacity: 1,
+      lift: () => -16,
+      additive: true,
+      brightness: 4,
+      flicker: true,
+    });
+    this.frostMist = new Dust(scene, {
+      capacity: () => 1800,
+      color: () => '#dcecf8',
+      lifetime: () => config.freezeBreath.mistLife,
+      drag: () => 2.2,
+      opacity: 0.28,
+      lift: () => -0.6,
+    });
+    this.decals = new SurfaceDecals(scene);
 
     events.on('player:sonicBoom', (e) => {
       const s = config.fx.sonicBoom;
@@ -104,6 +143,10 @@ export class Effects {
     this.shockwaves.update(dt);
     this.dust.update(dt, camera);
     this.collapseDust.update(dt, camera);
+    this.sparks.update(dt, camera);
+    this.droplets.update(dt, camera);
+    this.frostMist.update(dt, camera);
+    this.decals.update(dt);
   }
 
   /**
@@ -117,13 +160,20 @@ export class Effects {
     this.dust.mesh.count = on ? 1 : this.dust.count;
     this.collapseDust.mesh.count = on ? 1 : this.collapseDust.count;
     this.craters.mesh.count = on ? Math.max(1, this.craters.count) : this.craters.count;
+    for (const d of [this.sparks, this.droplets, this.frostMist]) d.mesh.count = on ? 1 : d.count;
   }
 
   get particleCount() {
-    return this.dust.count + this.collapseDust.count;
+    return (
+      this.dust.count +
+      this.collapseDust.count +
+      this.sparks.count +
+      this.droplets.count +
+      this.frostMist.count
+    );
   }
 
   get decalCount() {
-    return this.craters.count;
+    return this.craters.count + this.decals.count;
   }
 }

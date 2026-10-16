@@ -2,12 +2,19 @@ import * as THREE from 'three/webgpu';
 import { Synth } from '../audio/synth';
 import { config, getSeed, loadOverrides } from '../config';
 import { DestructionSystem } from '../destruction/destruction';
+import { HeatBeams } from '../fx/beams';
 import { Effects } from '../fx/effects';
+import { EnergyBallFx } from '../fx/energyBallFx';
 import { FireSystem } from '../fx/fire';
 import { InteriorSystem } from '../interiors/interiorSystem';
+import { EnergyBall } from '../powers/energyBall';
+import { FlyThrough } from '../powers/flyThrough';
+import { FreezeBreath } from '../powers/freezeBreath';
+import { HeatVision } from '../powers/heatVision';
 import { Strength } from '../powers/strength';
 import { Environment } from '../render/environment';
 import { updateInteriorUniforms } from '../render/interiorMapping';
+import { glowBrightness } from '../render/pieceMaterials';
 import { ShaderWarmup } from '../render/shaderWarmup';
 import { GameRenderer } from '../render/renderer';
 import { Physics } from '../physics/physics';
@@ -34,6 +41,8 @@ const _center = new THREE.Vector3();
 const _vel = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _slam = new THREE.Vector3();
+const _eyeL = new THREE.Vector3();
+const _eyeR = new THREE.Vector3();
 
 /** Wires every system together and owns the frame loop (DESIGN.md §14.2). */
 export class Game {
@@ -60,6 +69,12 @@ export class Game {
   hud!: Hud;
   interiors!: InteriorSystem;
   fire!: FireSystem;
+  heat!: HeatVision;
+  breath!: FreezeBreath;
+  flyThrough!: FlyThrough;
+  beams!: HeatBeams;
+  energy!: EnergyBall;
+  energyFx!: EnergyBallFx;
   perfHud!: PerfHud;
   speedometer!: Speedometer;
   debugPanel!: DebugPanel;
@@ -88,9 +103,13 @@ export class Game {
     landing: false,
     diving: false,
     boosting: false,
+    aim: 0,
+    lookPitch: 0,
     action: 'none',
     actionT: 0,
   };
+  /** Fly-through entry hitch: real seconds of slow motion left. */
+  private hitchTimer = 0;
   private sonicTimer = 0;
   private camTarget: CameraTarget = {
     x: 0,
@@ -142,6 +161,34 @@ export class Game {
     this.wireDestructionEvents();
     this.interiors = new InteriorSystem(this.scene, this.destruction, this.seed);
     this.fire = new FireSystem(this.scene, this.destruction, this.interiors);
+    this.heat = new HeatVision(
+      this.physics,
+      this.destruction,
+      this.interiors,
+      this.fire,
+      this.effects,
+      this.player,
+    );
+    this.breath = new FreezeBreath(
+      this.physics,
+      this.destruction,
+      this.fire,
+      this.effects,
+      this.player,
+    );
+    this.flyThrough = new FlyThrough(this.destruction, this.interiors, this.effects, this.player);
+    this.player.penetrator = this.flyThrough;
+    this.beams = new HeatBeams(this.scene);
+    this.energy = new EnergyBall(
+      this.physics,
+      this.destruction,
+      this.interiors,
+      this.fire,
+      this.player,
+    );
+    this.energyFx = new EnergyBallFx(this.scene, this.effects);
+    this.effects.decals.pieceStanding = (id) => this.destruction.city.store.isStatic(id);
+    events.on('player:tunnelEnter', () => (this.hitchTimer = config.flyThrough.hitchTime));
     console.log('[boot] destruction', (performance.now() - tD).toFixed(0), 'ms');
     this.hud = new Hud(this.root);
     this.perfHud = new PerfHud(this.root);
@@ -263,18 +310,20 @@ export class Game {
     this.player.lookYaw = this.rig.yaw;
     this.player.lookPitch = this.rig.pitch;
 
-    // Simulation: fixed 60 Hz, scaled and pausable.
+    // Simulation: fixed 60 Hz, scaled and pausable. A fly-through entry hitches briefly.
+    const hitch = this.hitchTimer > 0 ? config.flyThrough.hitchScale : 1;
+    this.hitchTimer = Math.max(0, this.hitchTimer - realDt);
     const alpha = this.simLoop.advance(
       realDt,
       {
-        timeScale: config.loop.timeScale,
+        timeScale: config.loop.timeScale * hitch,
         maxFrameDt: config.loop.maxFrameDt,
         maxSteps: config.loop.maxStepsPerFrame,
         paused: config.loop.paused,
       },
       this.fixedUpdate,
     );
-    const simDt = config.loop.paused ? 0 : realDt * config.loop.timeScale;
+    const simDt = config.loop.paused ? 0 : realDt * config.loop.timeScale * hitch;
 
     // Interpolated hero, body animation, camera.
     const pl = this.player;
@@ -299,6 +348,8 @@ export class Game {
     pose.landing = pl.landingTimer > 0;
     pose.diving = pl.diving;
     pose.boosting = this.input.action('boost').down && pl.state === 'flying';
+    pose.aim = this.heat.firing ? 1 : this.breath.firing ? 2 : this.energy.charging ? 3 : 0;
+    pose.lookPitch = this.rig.pitch;
     pose.action = this.strength.action;
     pose.actionT = this.strength.actionT;
     this.hero.update(this.heroPos.x, this.heroPos.y, this.heroPos.z, pose, simDt);
@@ -316,11 +367,40 @@ export class Game {
       t.vz = _vel.z;
       t.speed = speed;
       t.grounded = pl.state === 'grounded';
+      this.rig.aiming = this.heat.firing || this.breath.firing || this.energy.charging;
       const fov = this.rig.update(cam, t, realDt);
       this.renderer.setFov(fov);
     }
 
     this.strength.setAim(cam);
+    this.heat.setAim(cam);
+    this.breath.setAim(cam);
+    this.energy.setAim(cam);
+    // The charging ball sits in front of his chest, out along the aim.
+    _fwd.set(this.energy.aimDir.x, 0, this.energy.aimDir.z);
+    if (_fwd.lengthSq() < 1e-4) _fwd.set(0, 0, -1);
+    _fwd.normalize();
+    const br = EnergyBall.radius(Math.max(config.energyBall.minCharge, this.energy.charge));
+    this.energy.hand
+      .copy(this.heroPos)
+      .addScaledVector(_fwd, 0.7 + br)
+      .addScaledVector(_up, config.player.height * 0.66);
+    this.energyFx.update(this.energy, cam, simDt);
+    this.heat.frameUpdate(simDt);
+    this.breath.frameUpdate(simDt);
+    this.hero.setEyeGlow(Math.max(this.heat.ramp, this.heat.meter.level * 0.15));
+    this.hero.eyeWorld(-1, _eyeL);
+    this.hero.eyeWorld(1, _eyeR);
+    this.hero.mouthWorld(this.breath.mouth);
+    this.beams.update(this.heat.ramp > 0, _eyeL, _eyeR, this.heat.hit, cam, this.heat.ramp, simDt);
+    glowBrightness.value = config.heatVision.brightness * 0.45;
+    this.synth.setCharge(this.energy.charging, this.energy.charge);
+    this.synth.setPowers(
+      this.heat.firing,
+      this.heat.hitMaterial,
+      this.heat.target,
+      this.breath.firing,
+    );
     this.synth.setListener(cam.position.x, cam.position.y, cam.position.z);
     _center.set(this.heroPos.x, this.heroPos.y + config.player.height / 2, this.heroPos.z);
     this.effects.update(_center, _vel, cam, simDt);
@@ -331,6 +411,13 @@ export class Game {
     this.interiors.update(simDt, this.heroPos, cam);
     this.fire.update(simDt, cam);
     this.hud.update(realDt, !config.debug.freeCamera && this.strength.inReach());
+    this.hud.meters(
+      this.energy.charging ? Math.max(config.energyBall.minCharge, this.energy.charge) : -1,
+      this.heat.meter.level,
+      this.heat.meter.locked,
+      this.breath.meter.level,
+      this.breath.meter.exhausted,
+    );
     this.environment.focus.copy(this.heroPos);
     this.environment.update(realDt);
     updateInteriorUniforms(config.sun.elevationDeg);
@@ -352,6 +439,10 @@ export class Game {
     const input = config.debug.freeCamera ? null : this.input;
     this.player.fixedUpdate(input, dt);
     this.strength.fixedUpdate(input, dt);
+    this.heat.fixedUpdate(input, dt);
+    this.breath.fixedUpdate(input, dt);
+    this.energy.fixedUpdate(input, dt);
+    if (this.player.speed >= config.player.sonicThreshold * 0.9) this.flyThrough.lookAhead(dt);
     this.physics.step();
     this.destruction.fixedUpdate(dt);
     if (!config.debug.freeCamera) {

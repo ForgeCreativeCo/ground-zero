@@ -15,6 +15,14 @@ export class Synth {
   private rumbleGain!: GainNode;
   private noise!: AudioBuffer;
   private bursts = 0;
+  private muffle!: BiquadFilterNode;
+  private heatGain!: GainNode;
+  private heatOsc: OscillatorNode[] = [];
+  private sizzleGain!: GainNode;
+  private sizzleFilter!: BiquadFilterNode;
+  private breathGain!: GainNode;
+  private chargeGain!: GainNode;
+  private chargeOsc!: OscillatorNode;
 
   constructor() {
     const start = () => this.start();
@@ -34,6 +42,13 @@ export class Synth {
     events.on('building:stress', (e) => this.creak(e.x, e.y, e.z, e.duration));
     events.on('building:collapse', (e) => this.collapse(e.x, 20, e.z));
     events.on('cluster:crush', (e) => this.crush(e.x, e.y, e.z, e.mass));
+    events.on('heat:burnThrough', (e) => this.crack(e.x, e.y, e.z, false));
+    events.on('power:overheat', () => this.overheat());
+    events.on('player:tunnelEnter', () => this.tunnelEnter());
+    events.on('player:tunnelExit', () => this.tunnelExit());
+    events.on('player:tunnelCrash', () => this.tunnelCrash());
+    events.on('power:energyThrow', (e) => this.energyThrow(e.charge));
+    events.on('power:energyBlast', (e) => this.energyBlast(e.x, e.y, e.z, e.charge));
   }
 
   get running() {
@@ -48,7 +63,11 @@ export class Synth {
     if (!AC) return;
     const ctx = (this.ctx = new AC());
     this.master = ctx.createGain();
-    this.master.connect(ctx.destination);
+    // Inside a building at sonic speed everything is muffled (DESIGN.md §7.7).
+    this.muffle = ctx.createBiquadFilter();
+    this.muffle.type = 'lowpass';
+    this.muffle.frequency.value = 22000;
+    this.master.connect(this.muffle).connect(ctx.destination);
     this.fxBus = ctx.createGain();
     this.fxBus.connect(this.master);
 
@@ -84,6 +103,154 @@ export class Synth {
     rumbleSrc.connect(lp).connect(this.rumbleGain).connect(this.master);
     windSrc.start();
     rumbleSrc.start();
+
+    // Heat vision: a hum (two detuned saws, low-passed) and a sizzle where the beam lands.
+    this.heatGain = ctx.createGain();
+    this.heatGain.gain.value = 0;
+    const hl = ctx.createBiquadFilter();
+    hl.type = 'lowpass';
+    hl.frequency.value = 900;
+    hl.connect(this.heatGain).connect(this.fxBus);
+    for (const f of [96, 193.5]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(hl);
+      o.start();
+      this.heatOsc.push(o);
+    }
+    const sizzleSrc = ctx.createBufferSource();
+    sizzleSrc.buffer = this.noise;
+    sizzleSrc.loop = true;
+    this.sizzleFilter = ctx.createBiquadFilter();
+    this.sizzleFilter.type = 'bandpass';
+    this.sizzleFilter.frequency.value = 3200;
+    this.sizzleFilter.Q.value = 1.2;
+    this.sizzleGain = ctx.createGain();
+    this.sizzleGain.gain.value = 0;
+    sizzleSrc.connect(this.sizzleFilter).connect(this.sizzleGain).connect(this.fxBus);
+    sizzleSrc.start(0, 0.7);
+    // Freeze breath: a hiss of high noise (crackles are layered on in setPowers).
+    const breathSrc = ctx.createBufferSource();
+    breathSrc.buffer = this.noise;
+    breathSrc.loop = true;
+    const bh = ctx.createBiquadFilter();
+    bh.type = 'highpass';
+    bh.frequency.value = 1800;
+    this.breathGain = ctx.createGain();
+    this.breathGain.gain.value = 0;
+    breathSrc.connect(bh).connect(this.breathGain).connect(this.fxBus);
+    breathSrc.start(0, 1.3);
+    // Energy ball: a rising electric whine while charging.
+    this.chargeOsc = ctx.createOscillator();
+    this.chargeOsc.type = 'square';
+    this.chargeOsc.frequency.value = 110;
+    const cl = ctx.createBiquadFilter();
+    cl.type = 'lowpass';
+    cl.frequency.value = 1500;
+    this.chargeGain = ctx.createGain();
+    this.chargeGain.gain.value = 0;
+    this.chargeOsc.connect(cl).connect(this.chargeGain).connect(this.fxBus);
+    this.chargeOsc.start();
+  }
+
+  /** Per frame: the energy-ball charge whine (pitch rises with charge). */
+  setCharge(charging: boolean, charge: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    this.chargeGain.gain.setTargetAtTime(charging ? 0.05 + 0.08 * charge : 0, t, 0.05);
+    this.chargeOsc.frequency.setTargetAtTime(110 + 520 * charge * charge, t, 0.05);
+  }
+
+  private energyThrow(charge: number) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.noiseBurst(t, 0.35 + 0.3 * charge, 'bandpass', 900 + 900 * charge, 0.5);
+    this.tone(t, 0.3, 300 + 400 * charge, 90, 0.35);
+  }
+
+  /** The burst: a hard crack, a deep boom and debris settling (heard after it is seen). */
+  private energyBlast(x: number, y: number, z: number, charge: number) {
+    if (!this.ctx) return;
+    const [t, g] = this.at(x, y, z);
+    const k = (0.4 + 0.6 * charge) * Math.max(0.35, g);
+    this.noiseBurst(t, 0.12, 'highpass', 700, 0.9 * k);
+    this.noiseBurst(t, 1.2 + 1.5 * charge, 'lowpass', 600, 1.0 * k);
+    this.tone(t, 1 + charge, 70, 24, 0.9 * k);
+    this.noiseBurst(t + 0.3, 2.5 + 2 * charge, 'lowpass', 200, 0.5 * k);
+  }
+
+  /**
+   * Per frame: heat-vision hum and sizzle (pitch by the material under the beam) and the freeze
+   * breath hiss and crackle (DESIGN.md §11).
+   */
+  setPowers(heat: boolean, material: number, target: string, breath: boolean) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    // Material ids: 3 glass, 4 steel; -1 = not a building (ground, debris) or nothing.
+    const pitch =
+      material === 3
+        ? 1.5
+        : material === 4
+          ? 1.25
+          : material >= 0
+            ? 1
+            : target === 'world'
+              ? 0.85
+              : 0.7;
+    this.heatGain.gain.setTargetAtTime(heat ? 0.18 : 0, t, heat ? 0.03 : 0.08);
+    this.heatOsc[0]!.frequency.setTargetAtTime(96 * pitch, t, 0.05);
+    this.heatOsc[1]!.frequency.setTargetAtTime(193.5 * pitch, t, 0.05);
+    const sizzle = heat && target !== 'none';
+    this.sizzleGain.gain.setTargetAtTime(sizzle ? 0.32 : 0, t, sizzle ? 0.04 : 0.1);
+    this.sizzleFilter.frequency.setTargetAtTime(2400 * pitch + 800, t, 0.05);
+    this.breathGain.gain.setTargetAtTime(breath ? 0.22 : 0, t, breath ? 0.05 : 0.12);
+    if (breath && this.gate('crackle', 0.045) && (this.bursts & 3) !== 0) {
+      const f = 4000 + ((this.bursts * 1301) % 4000);
+      this.noiseBurst(t, 0.03, 'highpass', f, 0.18);
+    }
+  }
+
+  private overheat() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.noiseBurst(t, 0.8, 'highpass', 2500, 0.35);
+    this.tone(t, 0.4, 600, 200, 0.12);
+  }
+
+  /** Punching into a building at sonic speed: a deep crunch, then muffled inside. */
+  private tunnelEnter() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.tone(t, 0.5, 90, 28, 0.9);
+    this.noiseBurst(t, 0.45, 'lowpass', 1400, 0.9);
+    this.muffle.frequency.cancelScheduledValues(t);
+    this.muffle.frequency.setTargetAtTime(420, t + 0.04, 0.03);
+  }
+
+  /** Bursting out of the far side: the sound comes back all at once. */
+  private tunnelExit() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.muffle.frequency.cancelScheduledValues(t);
+    this.muffle.frequency.setValueAtTime(22000, t);
+    this.noiseBurst(t, 0.12, 'highpass', 800, 0.9);
+    this.noiseBurst(t, 1.6, 'lowpass', 900, 0.9);
+    this.tone(t, 0.9, 75, 30, 0.8);
+    // Glass and debris raining out behind him.
+    this.noiseBurst(t + 0.15, 1.2, 'highpass', 3800, 0.35);
+  }
+
+  private tunnelCrash() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.muffle.frequency.cancelScheduledValues(t);
+    this.muffle.frequency.setTargetAtTime(22000, t + 0.3, 0.4);
+    this.tone(t, 0.9, 70, 25, 1);
+    this.noiseBurst(t, 1.2, 'lowpass', 700, 1);
+    this.noiseBurst(t, 2.5, 'lowpass', 220, 0.5);
   }
 
   /** Per frame: speed drives the wind. */

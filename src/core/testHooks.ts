@@ -72,6 +72,13 @@ export function installTestHooks(game: Game) {
       return { x: v.x, y: v.y, z: v.z };
     },
     teleportPlayer: (x: number, y: number, z: number) => game.teleport(x, y, z),
+    /** Sets the hero's velocity (m/s): sonic runs without a long runway. */
+    setPlayerVelocity: (vx: number, vy: number, vz: number) => {
+      const v = game.player.velocity;
+      v.x = vx;
+      v.y = vy;
+      v.z = vz;
+    },
     resetPlayer: () => game.resetPlayer(),
     /** City footprint for tests that need a building to aim at. */
     buildings: () => game.city.layout.buildings.map((b) => ({ ...b })),
@@ -114,6 +121,11 @@ export function installTestHooks(game: Game) {
         material: s.mat[id]!,
       };
     },
+    piecesInSphere: (x: number, y: number, z: number, r: number) => {
+      const ids: number[] = [];
+      game.destruction.city.forEachPieceInSphere(x, y, z, r, (id) => ids.push(id));
+      return ids.length;
+    },
     pieceState: (id: number) => {
       const s = game.destruction.city.store;
       return {
@@ -141,12 +153,47 @@ export function installTestHooks(game: Game) {
         spawned: game.interiors.isSpawned(u),
       };
     },
+    /** Heat vision, freeze breath and fly-through state (M4). */
+    powers: () => ({
+      heat: {
+        ...game.heat.stats,
+        level: game.heat.meter.level,
+        locked: game.heat.meter.locked,
+        firing: game.heat.firing,
+        target: game.heat.target,
+        hit: { x: game.heat.hit.x, y: game.heat.hit.y, z: game.heat.hit.z },
+      },
+      breath: {
+        ...game.breath.stats,
+        level: game.breath.meter.level,
+        exhausted: game.breath.meter.exhausted,
+        firing: game.breath.firing,
+      },
+      fly: { ...game.flyThrough.stats, inside: game.flyThrough.inside.size },
+      energy: {
+        ...game.energy.stats,
+        charging: game.energy.charging,
+        charge: game.energy.charge,
+        inFlight: game.energy.balls.filter((b) => b.live).length,
+      },
+      penetrating: game.player.penetrating,
+      hotPieces: game.destruction.hot.size,
+      frozenPieces: game.destruction.frozenSet.size,
+      decals: game.effects.decals.count,
+    }),
+    /** Temperature (°C) and frozen seconds of a piece. */
+    pieceThermal: (id: number) => {
+      const s = game.destruction.city.store;
+      return { temperature: s.temperature[id]!, frozen: s.frozen[id]!, soot: s.soot[id]! };
+    },
     igniteAt: (x: number, y: number, z: number) => game.fire.igniteAt(x, y, z),
     igniteUnit: (u: number) => game.fire.ignite(u, 0.6),
     fireUnderReticle: () => game.fireUnderReticle(),
     floorPower: (b: number, f: number) => game.interiors.floorPower(b, f),
     cutStory: (building: number, story: number, fraction = 1) =>
       game.destruction.cutStory(building, story, fraction),
+    /** Buildings currently failing (creaking/sagging), by index. */
+    failingBuildings: () => [...game.destruction.structure.failures.keys()],
     /** Static pieces left in a building. */
     buildingIntact: (building: number) => {
       const b = game.destruction.city.buildings[building]!;

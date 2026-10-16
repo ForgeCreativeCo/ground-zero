@@ -12,7 +12,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "smoke": "playwright test tests/e2e/smoke.spec.ts tests/e2e/destruction.spec.ts tests/e2e/interiors.spec.ts",
+    "smoke": "playwright test tests/e2e/smoke.spec.ts tests/e2e/destruction.spec.ts tests/e2e/interiors.spec.ts tests/e2e/powers.spec.ts",
     "perf": "playwright test tests/e2e/perf.spec.ts",
     "verify": "npm run typecheck && npm run lint && npm test && npm run smoke && npm run perf"
   },

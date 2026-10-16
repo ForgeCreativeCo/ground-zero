@@ -38,6 +38,9 @@ export interface CameraTarget {
 export class CameraRig {
   yaw = 0;
   pitch = -0.12;
+  /** A power is firing (set each frame): the camera moves to the aim offset. */
+  aiming = false;
+  private aimK = 0;
   private arm = 4;
   private pivotY = 1.6;
   private fov = 70;
@@ -89,9 +92,13 @@ export class CameraRig {
     // Arm length by speed: close on foot, pulled back in cruise, further at boost.
     const cruiseK = t.grounded ? 0 : smoothstep(0, p.cruiseSpeed, t.speed);
     const boostK = smoothstep(p.cruiseSpeed, p.boostSpeed, t.speed);
-    const wantArm =
+    this.aimK += ((this.aiming ? 1 : 0) - this.aimK) * (1 - Math.exp(-c.aimResponse * dt));
+    const wantArm = THREE.MathUtils.lerp(
       THREE.MathUtils.lerp(c.distanceGround, c.distanceCruise, cruiseK) +
-      (c.distanceBoost - c.distanceCruise) * boostK;
+        (c.distanceBoost - c.distanceCruise) * boostK,
+      c.aimDistance,
+      this.aimK,
+    );
 
     // Lag a little behind at speed so speed reads, capped so he never leaves the frame.
     _want.set(-t.vx, -t.vy, -t.vz).multiplyScalar(c.velocityLag);
@@ -111,7 +118,13 @@ export class CameraRig {
       (1 - Math.exp(-4 * dt));
     _pivot.set(t.x, t.y + this.pivotY, t.z).add(this.lag);
     // Desired camera point: behind and over the right shoulder.
-    _want.copy(_back).multiplyScalar(wantArm).addScaledVector(_right, c.shoulderOffset);
+    _want
+      .copy(_back)
+      .multiplyScalar(wantArm)
+      .addScaledVector(
+        _right,
+        THREE.MathUtils.lerp(c.shoulderOffset, c.aimShoulderOffset, this.aimK),
+      );
     const wantLen = _want.length();
     _want.divideScalar(wantLen);
 

@@ -303,8 +303,8 @@ export class PieceRenderer {
       this.pieceSlot[id]!,
       cracked,
       s.flags[id]! & FLAG.windowsBroken ? 1 : 0,
-      Math.min(1, Math.max(s.soot[id]!, s.temperature[id]! / 800)),
-      Math.min(1, s.frozen[id]!),
+      Math.min(1, s.soot[id]!),
+      thermalState(s.frozen[id]!, s.temperature[id]!),
     );
     if (s.kind[id] === KIND.panel) {
       this.roomInfo(id, _room);
@@ -329,4 +329,15 @@ export class PieceRenderer {
     for (const b of this.batches) n += b.count;
     return n;
   }
+}
+
+/**
+ * aState.w: frost (0..1, positive; fades over the last seconds before thawing) or heat glow
+ * (negative, -1 = white hot). A piece is never both: heat thaws it and frost cools it.
+ */
+export function thermalState(frozen: number, temperature: number) {
+  if (frozen > 0) return Math.min(1, frozen / Math.max(0.01, config.freezeBreath.fadeTime));
+  const h = config.heatVision;
+  const glow = (temperature - h.glowStart) / Math.max(1, h.glowFull - h.glowStart);
+  return glow > 0 ? -Math.min(1, glow) : 0;
 }

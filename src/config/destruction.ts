@@ -49,6 +49,8 @@ export const damage = {
 export const structure = {
   /** A story fails when fewer than this fraction of its columns remain (with load above it). */
   minColumnFraction: 0.4,
+  /** Columns above this HP fraction carry their full load; below it, proportionally less. */
+  damagedCapacityAt: 0.7,
   /** Delayed failure window (s): creak → dust → sag → collapse. */
   failDelayMin: 2,
   failDelayMax: 8,
@@ -170,6 +172,7 @@ export const destructionMeta: MetaMap = {
   'damage.impactSpread': { min: 0, max: 10, step: 0.1 },
   'damage.heroImpactPerSpeed': { min: 0, max: 50, step: 0.1 },
   'structure.minColumnFraction': { min: 0, max: 1, step: 0.01 },
+  'structure.damagedCapacityAt': { min: 0, max: 1, step: 0.01 },
   'structure.failDelayMin': { min: 0, max: 20, step: 0.1 },
   'structure.failDelayMax': { min: 0, max: 30, step: 0.1 },
   'structure.sagMaxDeg': { min: 0, max: 15, step: 0.1 },

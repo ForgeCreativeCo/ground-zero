@@ -65,6 +65,35 @@ export interface FloorHit {
   slab: number;
 }
 
+/** One instanced mesh of chunks with swap-remove slots (flying chunks, or resting ones). */
+interface Batch {
+  mesh: THREE.InstancedMesh;
+  slots: (DebrisItem | null)[];
+  count: number;
+  visual: THREE.InstancedBufferAttribute;
+}
+
+function addToBatch(b: Batch, it: DebrisItem) {
+  it.slot = b.count;
+  b.visual.setX(it.slot, VI(CHUNK_LOOK[it.visual] ?? it.visual));
+  b.slots[b.count++] = it;
+}
+
+/** Swap-remove: the last chunk moves into the hole (matrix and look too). */
+function removeFromBatch(b: Batch, it: DebrisItem) {
+  const last = --b.count;
+  const moved = b.slots[last]!;
+  b.slots[it.slot] = moved;
+  b.visual.setX(it.slot, b.visual.getX(last));
+  if (moved !== it) {
+    b.mesh.getMatrixAt(last, _m);
+    b.mesh.setMatrixAt(it.slot, _m);
+  }
+  moved.slot = it.slot;
+  b.slots[last] = null;
+  it.slot = -1;
+}
+
 /** Growable instanced mesh for permanent rubble (never shrinks: damage is permanent). */
 class RubbleBatch {
   mesh: THREE.InstancedMesh;
@@ -226,12 +255,13 @@ export class DebrisSystem {
    * One instanced mesh for every flying chunk and one for all rubble, the look set per instance:
    * three.js builds shader code per instanced mesh, so they're made once, up front.
    */
-  private dyn: {
-    mesh: THREE.InstancedMesh;
-    slots: (DebrisItem | null)[];
-    count: number;
-    visual: THREE.InstancedBufferAttribute;
-  };
+  private dyn: Batch;
+  /**
+   * Chunks resting on upper floors: they don't move, so they live in their own mesh that only
+   * uploads when one is added or removed (thousands can pile up after a fly-through).
+   */
+  private parkedBatch: Batch;
+  private parkedDirty = false;
   private rubble: RubbleBatch;
   readonly itemOfCollider = new Map<number, DebrisItem>();
   /** Floor under a point inside buildings (set by the destruction system); null = ground only. */
@@ -254,16 +284,20 @@ export class DebrisSystem {
     this.piles = new RubblePiles(physics, halfExtent);
     const cap = config.budgets.activeRigidBodies + config.debris.visualCapacity;
     const material = pieceMaterial();
-    const g = batchGeometry(this.box, cap, 'structure');
-    for (let i = 0; i < cap; i++) g.state.setXYZW(i, 0.55, 1, 0, 0);
-    const mesh = new THREE.InstancedMesh(g.geometry, material, cap);
-    mesh.count = 0;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.frustumCulled = false;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.group.add(mesh);
-    this.dyn = { mesh, slots: new Array(cap).fill(null), count: 0, visual: g.visual };
+    const makeBatch = (n: number): Batch => {
+      const g = batchGeometry(this.box, n, 'structure');
+      for (let i = 0; i < n; i++) g.state.setXYZW(i, 0.55, 1, 0, 0);
+      const mesh = new THREE.InstancedMesh(g.geometry, material, n);
+      mesh.count = 0;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.frustumCulled = false;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.group.add(mesh);
+      return { mesh, slots: new Array(n).fill(null), count: 0, visual: g.visual };
+    };
+    this.dyn = makeBatch(cap);
+    this.parkedBatch = makeBatch(config.debris.visualCapacity);
     this.rubble = new RubbleBatch(
       this.group,
       this.box,
@@ -287,7 +321,7 @@ export class DebrisSystem {
 
   /** The debris and rubble meshes (for the shader warm-up). */
   get meshes() {
-    return [this.dyn.mesh, this.rubble.mesh];
+    return [this.dyn.mesh, this.parkedBatch.mesh, this.rubble.mesh];
   }
 
   /**
@@ -344,9 +378,7 @@ export class DebrisSystem {
         this.newBodies++;
       }
     }
-    it.slot = v.count;
-    v.visual.setX(it.slot, VI(CHUNK_LOOK[visual] ?? visual));
-    v.slots[v.count++] = it;
+    addToBatch(v, it);
     it.liveIdx = this.live.length;
     this.live.push(it);
     return it;
@@ -454,8 +486,16 @@ export class DebrisSystem {
       if (it.parked) {
         // Resting on an upper floor: falls again if that floor goes.
         if (it.restSlab >= 0 && !this.slabStanding(it.restSlab)) {
+          // No room among the flying chunks: it drops straight to the rubble below.
+          if (this.dyn.count >= this.dyn.slots.length) {
+            this.toRubble(it, true);
+            continue;
+          }
+          removeFromBatch(this.parkedBatch, it);
+          this.parkedDirty = true;
           it.parked = false;
           it.restSlab = -1;
+          addToBatch(this.dyn, it);
         }
         continue;
       }
@@ -516,6 +556,11 @@ export class DebrisSystem {
   }
 
   private park(it: DebrisItem, floor: FloorHit) {
+    // No room left among the resting chunks: it becomes rubble where it is instead.
+    if (this.parkedBatch.count >= this.parkedBatch.slots.length) {
+      this.toRubble(it);
+      return;
+    }
     this.removeBody(it);
     it.parked = true;
     it.restSlab = floor.slab;
@@ -529,6 +574,13 @@ export class DebrisSystem {
     _e.set(0, this.rng.range(0, Math.PI * 2), 0);
     it.quat.setFromEuler(_e);
     it.pos.y = floor.y + it.hy;
+    it.prevPos.copy(it.pos);
+    it.prevQuat.copy(it.quat);
+    removeFromBatch(this.dyn, it);
+    addToBatch(this.parkedBatch, it);
+    _m.compose(it.pos, it.quat, _s.set(it.hx * 2, it.hy * 2, it.hz * 2));
+    this.parkedBatch.mesh.setMatrixAt(it.slot, _m);
+    this.parkedDirty = true;
   }
 
   private readBody(it: DebrisItem) {
@@ -570,13 +622,11 @@ export class DebrisSystem {
     if (!it.live) return;
     this.removeBody(it);
     it.live = false;
-    const v = this.dyn;
-    const last = --v.count;
-    const moved = v.slots[last]!;
-    v.slots[it.slot] = moved;
-    v.visual.setX(it.slot, v.visual.getX(last));
-    moved.slot = it.slot;
-    v.slots[last] = null;
+    if (it.parked) {
+      removeFromBatch(this.parkedBatch, it);
+      this.parkedDirty = true;
+      it.parked = false;
+    } else removeFromBatch(this.dyn, it);
     const tail = this.live.pop()!;
     if (tail !== it) {
       this.live[it.liveIdx] = tail;
@@ -621,6 +671,13 @@ export class DebrisSystem {
       v.mesh.visible = v.count > 0;
       if (v.count > 0) uploadLive(v.count, v.mesh.instanceMatrix, v.visual);
     }
+    if (this.parkedDirty) {
+      const p = this.parkedBatch;
+      p.mesh.count = p.count;
+      p.mesh.visible = p.count > 0;
+      uploadLive(p.count, p.mesh.instanceMatrix, p.visual);
+      this.parkedDirty = false;
+    }
   }
 
   /** Items within r of a point (for blasts and grabs). */
@@ -654,6 +711,7 @@ export class DebrisSystem {
   setPrewarm(on: boolean) {
     const meshes: { mesh: THREE.InstancedMesh; count: number }[] = [];
     meshes.push({ mesh: this.dyn.mesh, count: this.dyn.count });
+    meshes.push({ mesh: this.parkedBatch.mesh, count: this.parkedBatch.count });
     meshes.push({ mesh: this.rubble.mesh, count: this.rubble.count });
     for (const { mesh, count } of meshes) {
       if (on && count === 0) {

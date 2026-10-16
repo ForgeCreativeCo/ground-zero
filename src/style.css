@@ -201,3 +201,71 @@ body {
 #reticle.reach {
   border-color: #f2a33a;
 }
+
+/* Power meters (DESIGN.md §10.1): heat-vision overheat and freeze breath, above the speed bar. */
+#power-meters {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 0.4s;
+}
+
+#power-meters.idle {
+  opacity: 0;
+}
+
+#power-meters .meter {
+  width: 120px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#power-meters .meter-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+}
+
+#power-meters .heat .meter-fill {
+  background: linear-gradient(90deg, #ffb347, #ff5a1f);
+}
+
+#power-meters .heat.locked .meter-fill {
+  background: #ff2a1a;
+  animation: meter-blink 0.25s steps(2) infinite;
+}
+
+#power-meters .breath .meter-fill {
+  background: linear-gradient(90deg, #9fd4ff, #e6f4ff);
+}
+
+#power-meters .charge .meter-fill {
+  background: linear-gradient(90deg, #5d8dff, #e3ecff);
+}
+
+#power-meters .charge.full .meter-fill {
+  background: #f4f8ff;
+  box-shadow: 0 0 6px #8fb3ff;
+}
+
+#power-meters .breath.exhausted .meter-fill {
+  background: #6f8fa8;
+}
+
+@keyframes meter-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+#power-meters .meter[hidden] {
+  display: none;
+}

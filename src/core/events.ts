@@ -61,6 +61,25 @@ export interface GameEvents {
   'cluster:crush': { x: number; y: number; z: number; mass: number };
   /** Property damage bill total changed. */
   'damage:bill': { total: number };
+  /** Heat vision filled its overheat meter (forced cooldown). */
+  'power:overheat': Record<string, never>;
+  /** Energy ball thrown, and where it burst (radius m, charge 0..1). */
+  'power:energyThrow': { charge: number };
+  'power:energyBlast': { x: number; y: number; z: number; radius: number; charge: number };
+  /** Heat vision burned through a piece (`cut` = sliced by a sweep rather than melted). */
+  'heat:burnThrough': { x: number; y: number; z: number; cut: boolean };
+  /** Sonic fly-through (DESIGN.md §7.7): entering a building, leaving it, crashing to a stop inside. */
+  'player:tunnelEnter': { building: number; x: number; y: number; z: number; speed: number };
+  'player:tunnelExit': {
+    building: number;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vy: number;
+    vz: number;
+  };
+  'player:tunnelCrash': { building: number; x: number; y: number; z: number };
 }
 
 export type PlayerState = 'grounded' | 'airborne' | 'flying';

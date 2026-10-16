@@ -21,6 +21,7 @@ import { fx, fxMeta } from './fx';
 import { fire, interiors, interiorsMeta, power } from './interiors';
 import { loop, loopMeta } from './loop';
 import { player, playerMeta } from './player';
+import { energyBall, flyThrough, freezeBreath, heatVision, powersMeta } from './powers';
 import type { MetaMap } from './meta';
 import { render, renderMeta } from './render';
 import {
@@ -53,6 +54,10 @@ const defaultsTree = {
   strength,
   slam,
   sonicCity,
+  heatVision,
+  freezeBreath,
+  energyBall,
+  flyThrough,
   interiors,
   power,
   fire,
@@ -84,6 +89,7 @@ export const meta: MetaMap = {
   ...audioMeta,
   ...destructionMeta,
   ...interiorsMeta,
+  ...powersMeta,
   ...debugCameraMeta,
   ...controlsMeta,
   ...budgetsMeta,

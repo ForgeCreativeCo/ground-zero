@@ -167,6 +167,7 @@ export class Input {
   };
 
   private onMouseDown = (e: MouseEvent) => {
+    if (e.button === 1) e.preventDefault(); // middle button: no autoscroll
     if (!this.pointerLocked) {
       this.requestPointerLock();
       return; // the capturing click shouldn't punch

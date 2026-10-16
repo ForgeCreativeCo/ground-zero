@@ -10,7 +10,7 @@ const _up = new THREE.Vector3(0, 1, 0);
 
 /**
  * Impact crater decals (DESIGN.md §5.4): flat cracked-and-scorched quads in one InstancedMesh,
- * capped by budgets.decals and recycling the oldest. Damage is permanent (pillar 1), so they
+ * capped by their share of budgets.decals and recycling the oldest. Damage is permanent (pillar 1), so they
  * never fade. Real ground deformation arrives with the destructible ground in M2.
  */
 export class Craters {
@@ -19,7 +19,7 @@ export class Craters {
   private rng = new Rng(0xc4a7);
 
   constructor(scene: THREE.Scene) {
-    const cap = config.budgets.decals;
+    const cap = craterCapacity();
     const tex = new THREE.CanvasTexture(drawCraterTexture(new Rng(0x5eed)));
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
@@ -47,9 +47,9 @@ export class Craters {
   }
 
   add(x: number, y: number, z: number, radius: number) {
-    const cap = config.budgets.decals;
+    const cap = this.mesh.instanceMatrix.count;
     if (cap <= 0) return;
-    const i = this.next % Math.min(cap, this.mesh.instanceMatrix.count);
+    const i = this.next % cap;
     this.next++;
     _q.setFromAxisAngle(_up, this.rng.range(0, Math.PI * 2));
     _m.compose(_p.set(x, y + 0.03, z), _q, _s.set(radius, 1, radius));
@@ -57,6 +57,12 @@ export class Craters {
     this.mesh.count = Math.max(this.mesh.count, i + 1);
     this.mesh.instanceMatrix.needsUpdate = true;
   }
+}
+
+/** Craters get a share of the decal budget; heat scars and frost get the rest (fx/decals.ts). */
+export function craterCapacity() {
+  const b = config.budgets;
+  return Math.max(1, Math.round(b.decals * b.craterDecalShare));
 }
 
 /** Procedural crater: scorched centre, a pressure ring and radial cracks, alpha fading out. */

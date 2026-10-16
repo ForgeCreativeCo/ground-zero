@@ -21,6 +21,8 @@ export const bindings = {
   punch: ['Mouse0', 'Pad:X'],
   heatVision: ['Mouse2', 'Pad:RT'],
   freezeBreath: ['KeyF', 'Pad:LT'],
+  /** Hold to charge an energy ball, release to throw it. */
+  energyBall: ['KeyG', 'Mouse1', 'Pad:RS'],
   /** Grab; on gamepad, Y again throws. */
   grab: ['KeyE', 'Pad:Y'],
   slam: ['KeyQ', 'Pad:RB'],

@@ -12,6 +12,11 @@ export const camera = {
   /** Pivot height in fast flight: higher, so you look down his back instead of at his soles. */
   pivotHeightFlight: 2.7,
   shoulderOffset: 0.6,
+  /** While heat vision or freeze breath fires: further over the shoulder and closer, so the
+   *  beams and breath cross the screen instead of hiding behind his head. */
+  aimShoulderOffset: 1.25,
+  aimDistance: 3.3,
+  aimResponse: 7,
   /** Arm length on the ground, at cruise and at max boost (interpolated by speed). */
   distanceGround: 4.2,
   distanceCruise: 5.6,
@@ -37,6 +42,9 @@ export const camera = {
 };
 
 export const cameraMeta: MetaMap = {
+  'camera.aimShoulderOffset': { min: 0, max: 4, step: 0.05 },
+  'camera.aimDistance': { min: 1, max: 15, step: 0.1 },
+  'camera.aimResponse': { min: 0.5, max: 30, step: 0.5 },
   'camera.mouseSensitivity': { min: 0.0002, max: 0.01, step: 0.0001 },
   'camera.stickLookSpeed': { min: 0.2, max: 8, step: 0.1 },
   'camera.minPitchDeg': { min: -89, max: 0, step: 1 },

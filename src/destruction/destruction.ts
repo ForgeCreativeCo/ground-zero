@@ -21,6 +21,15 @@ const _e = new THREE.Euler();
 type MatConfig = { hp: number; density: number; value: number; dust: string; fragments: number };
 
 /**
+ * Heat damage (heat vision): burned-through pieces melt instead of shattering, or, when the beam
+ * was sweeping, are sliced in two along `axis` (0/1/2, -1 = no cut) at world coordinate `at`.
+ */
+export interface BurnInfo {
+  axis: number;
+  at: number;
+}
+
+/**
  * The destruction system (DESIGN.md §7): owns the city's pieces and everything that happens to
  * them — damage and state changes, fracture into debris, revealing interiors, colliders, the
  * structural checks that make things fall, and the property-damage bill.
@@ -97,18 +106,20 @@ export class DestructionSystem {
    * Applies damage to a piece. (px, py, pz) is the push given to anything knocked loose (m/s).
    * Returns true if the piece was destroyed.
    */
-  damagePiece(id: number, amount: number, px = 0, py = 0, pz = 0): boolean {
+  damagePiece(id: number, amount: number, px = 0, py = 0, pz = 0, burn?: BurnInfo): boolean {
     const s = this.city.store;
     if (!s.isStatic(id) || amount <= 0) return false;
     this.activate(s.building[id]!);
     // Frozen pieces are brittle: blunt damage counts double (DESIGN.md §6.3).
-    if (s.frozen[id]! > 0) amount *= 2;
+    if (s.frozen[id]! > 0 && !burn) amount *= 2;
     const before = s.state[id]!;
     if (amount >= s.maxHp[id]! * config.damage.overkill) s.hp[id] = 0;
     else s.hp[id] = Math.max(0, s.hp[id]! - amount);
     const next = stateForHp(s.hp[id]! / s.maxHp[id]!, s.kind[id]!, config.damage);
     if (next === STATE.destroyed) {
-      this.destroyPiece(id, px, py, pz);
+      if (burn && burn.axis >= 0) this.slicePiece(id, burn.axis, burn.at, px, py, pz);
+      else if (burn) this.destroyPiece(id, px, py, pz, true, 0.8);
+      else this.destroyPiece(id, px, py, pz);
       return true;
     }
     if (next !== before) {
@@ -136,7 +147,7 @@ export class DestructionSystem {
   }
 
   /** Destroys a piece: it breaks into debris thrown by the push, and support is re-checked. */
-  destroyPiece(id: number, px = 0, py = 0, pz = 0, fragments = true) {
+  destroyPiece(id: number, px = 0, py = 0, pz = 0, fragments = true, fragmentShare = 1) {
     const s = this.city.store;
     if (!s.isStatic(id)) return;
     this.activate(s.building[id]!);
@@ -144,7 +155,7 @@ export class DestructionSystem {
     s.hp[id] = 0;
     this.renderer.hide(id);
     this.reveal(id);
-    if (fragments) this.spawnFragments(id, px, py, pz, 1);
+    if (fragments) this.spawnFragments(id, px, py, pz, fragmentShare);
     if (s.mat[id] === MAT.glass) this.glassFx(id, 18);
     else
       this.fx.dust.ring(
@@ -164,6 +175,148 @@ export class DestructionSystem {
       material: s.mat[id]!,
       mass: s.mass[id]!,
     });
+  }
+
+  /**
+   * Heat vision cut (DESIGN.md §6.2): the piece splits in two along `axis` at world coordinate
+   * `at`, leaving a kerf between the halves, which come loose as debris. Support is re-checked,
+   * so cutting columns feeds the structural system.
+   */
+  slicePiece(id: number, axis: number, at: number, px = 0, py = 0, pz = 0) {
+    const s = this.city.store;
+    if (!s.isStatic(id)) return;
+    this.activate(s.building[id]!);
+    s.state[id] = STATE.destroyed;
+    s.hp[id] = 0;
+    this.renderer.hide(id);
+    this.reveal(id);
+    const c = [s.cx[id]!, s.cy[id]!, s.cz[id]!];
+    const h = [s.hx[id]!, s.hy[id]!, s.hz[id]!];
+    const kerf = config.heatVision.cutKerf / 2;
+    const lo = c[axis]! - h[axis]!;
+    const hi = c[axis]! + h[axis]!;
+    const cut = Math.max(lo + kerf + 0.05, Math.min(hi - kerf - 0.05, at));
+    const visual = this.renderer.visualFor(id, true);
+    const density = this.mat(id).density;
+    for (const [a, b] of [
+      [lo, cut - kerf],
+      [cut + kerf, hi],
+    ] as const) {
+      if (b - a < 0.04) continue;
+      const cc = [c[0]!, c[1]!, c[2]!];
+      const hh = [h[0]!, h[1]!, h[2]!];
+      cc[axis] = (a + b) / 2;
+      hh[axis] = (b - a) / 2;
+      // The halves part along the cut, a little each way, and slump.
+      const sep = cc[axis]! < cut ? -0.6 : 0.6;
+      this.debris.spawn(
+        visual,
+        cc[0]!,
+        cc[1]!,
+        cc[2]!,
+        hh[0]!,
+        hh[1]!,
+        hh[2]!,
+        _q.identity(),
+        px + (axis === 0 ? sep : 0),
+        py + (axis === 1 ? sep * 0.5 : 0),
+        pz + (axis === 2 ? sep : 0),
+        density,
+        true,
+      );
+    }
+    this.afterRemoval(id);
+    events.emit('piece:destroyed', {
+      id,
+      x: s.cx[id]!,
+      y: s.cy[id]!,
+      z: s.cz[id]!,
+      material: s.mat[id]!,
+      mass: s.mass[id]!,
+    });
+  }
+
+  // --- heat and cold (DESIGN.md §6.2, §6.3) ---------------------------------------------------
+
+  /** Pieces above ambient temperature; they cool and stop glowing over time. */
+  readonly hot = new Set<number>();
+  /** Frozen pieces counting down to thaw. */
+  readonly frozenSet = new Set<number>();
+  private heatRefresh = 0;
+  private hotBuildings = new Set<number>();
+
+  /** Raises a piece's temperature (thawing it first). Hot steel loses strength (collapse.ts). */
+  heatPiece(id: number, deg: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id) || deg <= 0) return;
+    this.activate(s.building[id]!);
+    if (s.frozen[id]! > 0) {
+      s.frozen[id] = 0;
+      this.frozenSet.delete(id);
+    }
+    const t = Math.min(config.heatVision.maxTemperature, s.temperature[id]! + deg);
+    s.temperature[id] = t;
+    // Heat scorches: concrete and brick blacken where the beam has been.
+    s.soot[id] = Math.max(s.soot[id]!, Math.min(0.9, t / 1500));
+    this.hot.add(id);
+    if (s.mat[id] === MAT.steel) this.hotBuildings.add(s.building[id]!);
+  }
+
+  /** Buildings whose steel was heated since the last call (their structure needs a re-check). */
+  takeHotSteelBuildings(out: number[]) {
+    out.length = 0;
+    for (const b of this.hotBuildings) out.push(b);
+    this.hotBuildings.clear();
+    return out;
+  }
+
+  /**
+   * Freeze breath on a piece: `amount` seconds of frost added (capped at the thaw time). Frozen
+   * pieces take double blunt damage. Cools hot pieces first.
+   */
+  freezePiece(id: number, amount: number, cool: number) {
+    const s = this.city.store;
+    if (!s.isStatic(id) || amount <= 0) return;
+    this.activate(s.building[id]!);
+    if (s.temperature[id]! > 0) {
+      s.temperature[id] = Math.max(0, s.temperature[id]! - cool);
+      if (s.temperature[id]! > 0) return; // still too hot to frost
+      this.hot.delete(id);
+    }
+    const thaw = config.freezeBreath.thawTime;
+    const was = s.frozen[id]!;
+    s.frozen[id] = Math.min(thaw, was + amount);
+    this.frozenSet.add(id);
+    if (was <= 0) this.renderer.refresh(id);
+  }
+
+  /** Cooling, thawing and refreshing their looks (a few times a second). */
+  private updateTemperatures(dt: number) {
+    const s = this.city.store;
+    const k = Math.exp(-config.heatVision.cooling * dt);
+    for (const id of this.hot) {
+      const t = s.temperature[id]! * k;
+      if (t < 5 || !s.isStatic(id)) {
+        s.temperature[id] = 0;
+        this.hot.delete(id);
+        if (s.isStatic(id)) this.renderer.refresh(id);
+      } else s.temperature[id] = t;
+    }
+    for (const id of this.frozenSet) {
+      const f = s.frozen[id]! - dt;
+      if (f <= 0 || !s.isStatic(id)) {
+        s.frozen[id] = 0;
+        this.frozenSet.delete(id);
+        if (s.isStatic(id)) this.renderer.refresh(id);
+      } else s.frozen[id] = f;
+    }
+    this.heatRefresh -= dt;
+    if (this.heatRefresh <= 0) {
+      this.heatRefresh = 0.1;
+      for (const id of this.hot) this.renderer.refresh(id);
+      for (const id of this.frozenSet)
+        if (s.frozen[id]! < config.freezeBreath.fadeTime) this.renderer.refresh(id);
+    }
   }
 
   /** Crushed by a falling section: no flying fragments, just rubble and dust. */
@@ -551,6 +704,7 @@ export class DestructionSystem {
     this.stepDt = dt;
     this.debris.fixedUpdate(dt);
     this.structure.fixedUpdate(dt);
+    this.updateTemperatures(dt);
   }
 
   frameUpdate(alpha: number) {
@@ -563,7 +717,7 @@ export class DestructionSystem {
   }
 
   /**
-   * Debug/test tool (and how heat-vision cuts will feed in, M4): destroys `fraction` of the
+   * Debug/test tool: destroys `fraction` of the
    * columns of one story, lowest ids first on one side, so the building creaks, sags and goes.
    */
   cutStory(building: number, story: number, fraction: number): boolean {

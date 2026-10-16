@@ -164,6 +164,24 @@ export class InteriorSystem {
       }
   }
 
+  /** The unit behind a facade panel, or -1. */
+  unitBehindPanel(id: number): number {
+    const city = this.destruction.city;
+    if (city.store.kind[id] !== KIND.panel) return -1;
+    return this.units.unitOfPanel(city.buildingOf(id), id);
+  }
+
+  /** Furnishes a unit right now instead of queueing it (the hero is about to arrive at sonic speed). */
+  spawnNow(u: number) {
+    if (u < 0 || this.units.flags[u]! & UFLAG.spawned) return false;
+    if (this.queued.delete(u)) {
+      const i = this.queue.indexOf(u);
+      if (i >= 0) this.queue.splice(i, 1);
+    }
+    this.spawn(u);
+    return true;
+  }
+
   isSpawned(u: number) {
     return (this.units.flags[u]! & UFLAG.spawned) !== 0;
   }

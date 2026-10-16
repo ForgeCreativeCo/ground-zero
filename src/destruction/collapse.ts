@@ -520,11 +520,17 @@ export class StructuralSystem {
     }
   }
 
-  /** Column load capacity (1 = intact). Hot steel loses strength (heat vision, M4). */
+  /**
+   * Column load capacity (1 = intact). Hot steel loses strength (heat vision, fire), and badly
+   * damaged columns carry less (a tunnel's shock, heavy cracks).
+   */
   capacity(id: number) {
     const s = this.city.store;
     const t = s.temperature[id]!;
-    return t > 300 ? Math.max(0, 1 - (t - 300) / 500) : 1;
+    const heat = t > 300 ? Math.max(0, 1 - (t - 300) / 500) : 1;
+    const full = config.structure.damagedCapacityAt;
+    const hp = s.maxHp[id]! > 0 ? s.hp[id]! / s.maxHp[id]! : 1;
+    return heat * (full > 0 ? Math.min(1, hp / full) : 1);
   }
 
   private startFailure(

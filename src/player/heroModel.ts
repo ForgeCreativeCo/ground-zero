@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { color, uniform, vec3 } from 'three/tsl';
 import { config } from '../config';
 import { smoothstep } from './flightModel';
 
@@ -55,6 +56,10 @@ export interface HeroPoseInput {
   landing: boolean;
   diving: boolean;
   boosting: boolean;
+  /** Power stance: 0 none, 1 heat vision, 2 freeze breath (DESIGN.md §3), 3 charging an energy ball. */
+  aim: number;
+  /** Camera pitch (the head follows it while aiming). */
+  lookPitch: number;
   /** Strength action layered over the movement pose (see powers/strength.ts). */
   action: string;
   /** 0..1 progress of the action. */
@@ -69,6 +74,7 @@ const _x = new THREE.Vector3();
 const _y = new THREE.Vector3();
 const _z = new THREE.Vector3();
 const _axisY = new THREE.Vector3(0, 1, 0);
+const _local = new THREE.Vector3();
 
 export class HeroModel {
   /** Placed at the body centre; rotations pivot here. */
@@ -85,6 +91,9 @@ export class HeroModel {
   private flyBlend = 0;
   private time = 0;
   readonly suit: THREE.MeshStandardNodeMaterial;
+  /** Eye glow (heat vision charging/firing, DESIGN.md §3), 0..1. */
+  private eyeGlow = uniform(0);
+  private eyes: THREE.Mesh[] = [];
 
   constructor(scene: THREE.Scene) {
     this.suit = new THREE.MeshStandardNodeMaterial({
@@ -141,6 +150,19 @@ export class HeroModel {
     limb(neck, 0.06, 0.06, 1);
     const head = j('head', neck, 0, 0.1, 0);
     ball(head, 0.115, 0.1, 0.9, 1.12, 1.0);
+    // Eyes: dark until heat vision lights them up white-hot.
+    const eyeMat = new THREE.MeshBasicNodeMaterial();
+    eyeMat.colorNode = vec3(0.04, 0.04, 0.05).add(
+      color(0xffa040).mul(this.eyeGlow.mul(this.eyeGlow).mul(config.heatVision.brightness)),
+    );
+    const eyeGeo = new THREE.SphereGeometry(0.018, 10, 8);
+    for (const side of [-1, 1]) {
+      const e = new THREE.Mesh(eyeGeo, eyeMat);
+      e.position.set(side * 0.042, EYE_Y, EYE_Z);
+      e.scale.set(1.3, 0.8, 0.6);
+      head.add(e);
+      this.eyes.push(e);
+    }
 
     for (const side of [1, -1] as const) {
       const L = side === 1;
@@ -174,8 +196,8 @@ export class HeroModel {
     const prevHeading = this.heading;
     if (s.horizontalSpeed > 1.5) {
       this.heading = dampAngle(this.heading, Math.atan2(-s.dirX, -s.dirZ), 12, dt);
-    } else if (s.state !== 'grounded' || s.charging > 0) {
-      this.heading = dampAngle(this.heading, s.lookYaw, 6, dt);
+    } else if (s.state !== 'grounded' || s.charging > 0 || s.aim > 0) {
+      this.heading = dampAngle(this.heading, s.lookYaw, s.aim > 0 ? 12 : 6, dt);
     }
     const yawRate = wrapAngle(this.heading - prevHeading) / Math.max(dt, 1e-4);
 
@@ -214,6 +236,7 @@ export class HeroModel {
 
     this.computePose(s, dt);
     this.applyAction(s.action, s.actionT);
+    this.applyStance(s);
     const k = 1 - Math.exp(-p.poseResponse * dt);
     for (let i = 0; i < this.current.length; i++) {
       this.current[i]! += (this.target[i]! - this.current[i]!) * k;
@@ -224,6 +247,58 @@ export class HeroModel {
       this.joints[JOINTS[i]!].rotation.set(c[i * 3]!, c[i * 3 + 1]!, c[i * 3 + 2]!);
     }
     this.joints.hips.position.y = 1.0 - this.hipDrop;
+  }
+
+  /**
+   * Heat vision stance: braced, head on the target. Freeze breath: leaning into the breath.
+   * Energy ball: both hands out in front, cupped around it.
+   */
+  private applyStance(s: HeroPoseInput) {
+    if (s.aim === 0 || this.flyBlend > 0.6) return;
+    const pitch = THREE.MathUtils.clamp(s.lookPitch, -1.1, 0.9);
+    if (s.aim === 1) {
+      this.set('neck', pitch * 0.55);
+      this.set('head', pitch * 0.35);
+      this.set('spine', -0.06 + pitch * 0.1);
+      this.set('shoulderR', 0.25, 0, -0.25);
+      this.set('shoulderL', 0.25, 0, 0.25);
+      this.set('elbowR', 0.6);
+      this.set('elbowL', 0.6);
+    } else if (s.aim === 3) {
+      // Both hands out in front, cupped around the ball.
+      this.set('spine', -0.1 + pitch * 0.1);
+      this.set('neck', pitch * 0.4);
+      this.set('shoulderR', 1.35 + pitch * 0.6, 0.35, -0.35);
+      this.set('shoulderL', 1.35 + pitch * 0.6, -0.35, 0.35);
+      this.set('elbowR', 0.75);
+      this.set('elbowL', 0.75);
+      this.hipDropTarget = Math.max(this.hipDropTarget, 0.08);
+    } else {
+      this.set('spine', -0.18 + pitch * 0.15);
+      this.set('chest', -0.1);
+      this.set('neck', 0.25 + pitch * 0.45);
+      this.set('head', 0.12 + pitch * 0.3);
+      this.set('shoulderR', 0.1, 0, -0.35);
+      this.set('shoulderL', 0.1, 0, 0.35);
+    }
+  }
+
+  /** Glow of the eyes (0..1). */
+  setEyeGlow(k: number) {
+    this.eyeGlow.value = k;
+  }
+
+  /** World position of an eye (side -1 = left, 1 = right). Call after update(). */
+  eyeWorld(side: number, out: THREE.Vector3) {
+    this.root.updateMatrixWorld(false);
+    _local.set(side * 0.042, EYE_Y, EYE_Z - 0.01);
+    return this.joints.head.localToWorld(out.copy(_local));
+  }
+
+  /** World position just in front of the mouth. Call after update(). */
+  mouthWorld(out: THREE.Vector3) {
+    this.root.updateMatrixWorld(false);
+    return this.joints.head.localToWorld(out.set(0, EYE_Y - 0.075, EYE_Z - 0.02));
   }
 
   /** World-space chest position (tests check the camera frames him). */
@@ -389,6 +464,10 @@ export class HeroModel {
     this.set('neck', 0.55 * f); // look ahead when horizontal
   }
 }
+
+/** Eye height and depth in the head joint's frame (the head ball sits 0.1 above the joint). */
+const EYE_Y = 0.115;
+const EYE_Z = -0.108;
 
 function wrapAngle(a: number) {
   return Math.atan2(Math.sin(a), Math.cos(a));

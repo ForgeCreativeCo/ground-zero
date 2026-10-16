@@ -15,6 +15,7 @@ import {
   select,
   smoothstep,
   step,
+  uniform,
   uv,
   vec2,
   vec3,
@@ -29,7 +30,8 @@ import { roomRadiance } from './interiorMapping';
  * Materials for building pieces and debris (DESIGN.md §7.4, §12). Every mesh using them carries
  * two instanced attributes on its geometry:
  * - aTint  (vec3): per-instance colour multiplier (building variety);
- * - aState (vec4): x = crack amount 0..1, y = windows blown out, z = scorch (M4), w = frost (M4).
+ * - aState (vec4): x = crack amount 0..1, y = windows blown out, z = soot/scorch,
+ *   w = frost (0..1) or heat glow (negative, -1 = white hot).
  */
 export type PieceVisual =
   | 'structure'
@@ -141,6 +143,9 @@ function windowMask() {
   // Only on the big faces of a panel, not its thin edges.
   return inX.mul(inY);
 }
+
+/** Brightness of hot pieces (follows config.heatVision.brightness; set each frame). */
+export const glowBrightness = uniform(config.heatVision.brightness * 0.45);
 
 let shared: THREE.MeshStandardNodeMaterial | null = null;
 
@@ -279,6 +284,13 @@ function createUberMaterial(): THREE.MeshStandardNodeMaterial {
     });
     // Soot and charring (fire, heat).
     col.assign(mix(col, color(0x0c0b0a), smoothstep(0, 1, s.z).mul(0.9)));
+    // Frost (freeze breath): rime in blotches over everything, glassy where it's thick.
+    const frost = max(s.w, 0);
+    const rime = smoothstep(-0.3, 0.5, mx_noise_float(positionWorld.mul(2.3)));
+    const crystals = smoothstep(0.1, 0.45, mx_noise_float(positionWorld.mul(13)));
+    const frostK = frost.mul(rime.mul(0.35).add(crystals.mul(0.3)).add(0.35));
+    col.assign(mix(col, color(0xd8e8f4), frostK.mul(0.85)));
+    rough.assign(mix(rough, float(0.3), frostK));
     return vec4(col, rough);
   });
 
@@ -319,6 +331,14 @@ function createUberMaterial(): THREE.MeshStandardNodeMaterial {
       // Soot darkens the rooms too.
       out.assign(out.mul(float(1).sub(smoothstep(0, 1, s.z).mul(0.8))));
     }
+    // Heat glow (heat vision, fire): dull red, orange, then white hot (aState.w < 0).
+    const glow = max(s.w.negate(), 0);
+    const hot = mix(
+      mix(vec3(0.55, 0.03, 0.0), vec3(1.0, 0.32, 0.04), smoothstep(0.0, 0.5, glow)),
+      vec3(1.0, 0.88, 0.62),
+      smoothstep(0.5, 1.0, glow),
+    );
+    out.addAssign(hot.mul(glow.mul(glow).mul(glowBrightness)));
     return out;
   });
 

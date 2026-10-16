@@ -28,6 +28,16 @@ const _colliderPos = { x: 0, y: 0, z: 0 };
 const _up = { x: 0, y: 0.3, z: 0 };
 const _hit = v3();
 
+/** Sonic fly-through (DESIGN.md §7.7): what he passes through and what that does. */
+export interface Penetrator {
+  /** Colliders a sonic hero goes straight through (buildings). */
+  passes(collider: RAPIER.Collider): boolean;
+  /** He moved from a to b (body centre) in one substep while penetrating. */
+  sweep(ax: number, ay: number, az: number, bx: number, by: number, bz: number): void;
+  /** He dropped out of penetration (below the threshold or landed) at body centre (x, y, z). */
+  ended(x: number, y: number, z: number): void;
+}
+
 /**
  * The hero's movement (DESIGN.md §5): walk/run, charged superhuman leap, take-off, hover, cruise,
  * boost, sonic and dive, on a Rapier kinematic character controller. Runs at the fixed sim rate;
@@ -52,6 +62,10 @@ export class PlayerController {
   band: SpeedBand = 'hover';
   /** Counters for tests and the HUD. */
   stats = { sonicBooms: 0, hardLandings: 0, impacts: 0, unstucks: 0 };
+  /** Sonic fly-through hook (set by the game); null = buildings always block. */
+  penetrator: Penetrator | null = null;
+  /** Going through buildings this step (sonic, flying). */
+  penetrating = false;
 
   private body: RAPIER.RigidBody;
   private ray: RAPIER.Ray;
@@ -66,6 +80,7 @@ export class PlayerController {
   private wallContact = false;
   private stuck = 0;
   private lastFlatYaw = 0;
+  private passFilter = (c: RAPIER.Collider) => !this.penetrator!.passes(c);
 
   constructor(private readonly physics: Physics) {
     const p = config.player;
@@ -305,6 +320,12 @@ export class PlayerController {
     if (this.state === 'grounded') this.kcc.enableSnapToGround(p.snapToGround);
     else this.kcc.disableSnapToGround();
 
+    const wasPenetrating = this.penetrating;
+    this.penetrating =
+      flying && !!this.penetrator && config.flyThrough.enabled && this.speed >= p.sonicThreshold;
+    if (wasPenetrating && !this.penetrating)
+      this.penetrator?.ended(this.position.x, this.position.y + p.height / 2, this.position.z);
+    const filter = this.penetrating ? this.passFilter : undefined;
     const dist = this.speed * dt;
     const steps = Math.min(p.maxSubsteps, Math.max(1, Math.ceil(dist / p.maxSubstep)));
     const sub = dt / steps;
@@ -324,12 +345,19 @@ export class PlayerController {
       _delta.x = this.velocity.x * sub;
       _delta.y = this.velocity.y * sub;
       _delta.z = this.velocity.z * sub;
-      this.kcc.computeColliderMovement(this.collider, _delta, flags);
+      this.kcc.computeColliderMovement(this.collider, _delta, flags, undefined, filter);
       const mv = this.kcc.computedMovement();
+      const hy = p.height / 2;
+      const ax = this.position.x;
+      const ay = this.position.y + hy;
+      const az = this.position.z;
       this.position.x += mv.x;
       this.position.y += mv.y;
       this.position.z += mv.z;
       this.syncCollider();
+      if (this.penetrating) {
+        this.penetrator!.sweep(ax, ay, az, this.position.x, this.position.y + hy, this.position.z);
+      }
       grounded = this.kcc.computedGrounded();
 
       let reported = false;
@@ -448,6 +476,8 @@ export class PlayerController {
       R.QueryFilterFlags.EXCLUDE_DYNAMIC,
       undefined,
       this.collider,
+      undefined,
+      this.penetrating ? this.passFilter : undefined,
     );
     if (!hit) return false;
     _n.x = hit.normal.x;
@@ -524,6 +554,11 @@ export class PlayerController {
   private unstickIfNeeded(mx: number, my: number, dt: number) {
     const p = config.player;
     const w = this.physics.world;
+    // Going through buildings at sonic speed is meant to be inside them.
+    if (this.penetrating) {
+      this.stuck = 0;
+      return;
+    }
     _center.x = this.position.x;
     _center.y = this.position.y + p.height / 2;
     _center.z = this.position.z;
@@ -615,6 +650,14 @@ export class PlayerController {
     this.state = next;
     if (next !== 'flying') this.band = 'hover';
     events.emit('player:state', { from, to: next });
+  }
+
+  /** Moves him (feet position) mid-step, e.g. ploughing on into a building as he crashes. */
+  shiftTo(x: number, y: number, z: number) {
+    this.position.x = x;
+    this.position.y = y;
+    this.position.z = z;
+    this.syncCollider();
   }
 
   /** Debug: drop to the ground state wherever he is. */

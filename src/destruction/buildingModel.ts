@@ -1,3 +1,4 @@
+import { rayBox, type RayBoxHit } from '../core/geom';
 import { Rng } from '../core/rng';
 import type { Building as LayoutBuilding } from '../world/cityLayout';
 import { FLAG, KIND, MAT, STATE, type PieceStore } from './pieces';
@@ -584,6 +585,83 @@ export class BuildingModel {
     if (f1 >= this.floors - 1) for (let k = 0; k < this.roofCount; k++) test(this.roofBase + k);
   }
 
+  /**
+   * Calls fn for every static piece the ray o + t·d crosses for t in [t0, t1] (d unit length),
+   * with the ray/box hit (entry t, entry face). Unordered. Only the floors the ray spans are tested.
+   */
+  forEachOnRay(
+    store: PieceStore,
+    ox: number,
+    oy: number,
+    oz: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    t0: number,
+    t1: number,
+    fn: (id: number, hit: RayBoxHit) => void,
+  ) {
+    const top = this.height + this.p.parapetHeight + 3;
+    if (
+      !rayBox(
+        ox,
+        oy,
+        oz,
+        dx,
+        dy,
+        dz,
+        (this.x0 + this.x1) / 2,
+        top / 2,
+        (this.z0 + this.z1) / 2,
+        (this.x1 - this.x0) / 2 + 0.5,
+        top / 2,
+        (this.z1 - this.z0) / 2 + 0.5,
+        _bHit,
+      )
+    )
+      return;
+    const ta = Math.max(t0, _bHit.tEnter);
+    const tb = Math.min(t1, _bHit.tExit);
+    if (ta > tb) return;
+    const H = this.p.floorHeight;
+    const ya = oy + dy * ta;
+    const yb = oy + dy * tb;
+    const f0 = Math.max(0, Math.floor(Math.min(ya, yb) / H) - 1);
+    const f1 = Math.min(this.floors - 1, Math.floor(Math.max(ya, yb) / H) + 1);
+    const test = (id: number) => {
+      if (!store.isStatic(id)) return;
+      if (
+        rayBox(
+          ox,
+          oy,
+          oz,
+          dx,
+          dy,
+          dz,
+          store.cx[id]!,
+          store.cy[id]!,
+          store.cz[id]!,
+          store.hx[id]!,
+          store.hy[id]!,
+          store.hz[id]!,
+          _pHit,
+        ) &&
+        _pHit.tEnter <= tb &&
+        _pHit.tExit >= ta
+      )
+        fn(id, _pHit);
+    };
+    const per = this.ncx * this.ncz;
+    const cells = (this.ncx - 1) * (this.ncz - 1);
+    for (let f = f0; f <= f1; f++) {
+      for (let k = 0; k < per; k++) test(this.colBase + f * per + k);
+      for (let k = 0; k < cells; k++) test(this.slabBase + f * cells + k);
+      for (let k = 0; k < this.panelsPerFloor; k++)
+        test(this.panelBase + f * this.panelsPerFloor + k);
+    }
+    if (f1 >= this.floors - 1) for (let k = 0; k < this.roofCount; k++) test(this.roofBase + k);
+  }
+
   /** Static pieces whose boxes overlap the given AABB. */
   forEachInBox(
     store: PieceStore,
@@ -635,6 +713,9 @@ function bayToCell(bays: number, lines: number[]) {
   }
   return out;
 }
+
+const _bHit: RayBoxHit = { tEnter: 0, tExit: 0, axis: 0, sign: 1 };
+const _pHit: RayBoxHit = { tEnter: 0, tExit: 0, axis: 0, sign: 1 };
 
 function clamp(v: number, lo: number, hi: number) {
   return lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v));

@@ -40,6 +40,9 @@ test('M1: flight states, sonic boom, impacts and camera', async ({ page }) => {
   const errors = trackErrors(page);
   const info = await bootGame(page);
   console.log(`backend: ${info.backend}, seed: ${info.seed}`);
+  // Movement timing checks below assume steady frames: let the background shader warm-up finish
+  // (its one early stall is a known issue, see docs/DECISIONS.md M4 follow-up).
+  await page.waitForFunction(() => window.__GZ__.warm === true, undefined, { timeout: 60_000 });
   await page.waitForTimeout(800);
   await shot(page, 'm1-01-start');
   await expect(page.locator('#perf-hud pre')).toContainText('fps');
