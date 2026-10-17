@@ -205,3 +205,22 @@ Judgment calls the spec doesn't cover, one line of reasoning each. Newest at the
 - **Known issues:**
   - The wind-up camera doesn't pull back, so the aura and debris crowd the view at the default distance.
   - Buildings in the edge zone often topple into their neighbours for a while after the front passes, adding to the load.
+
+## Mobile controls and landscape-only play (user request after M8)
+
+- **On-screen touch controls appear on phones and tablets**: devices whose main pointer is a finger and can't hover (`controls.touchUi`: auto by default; "on" forces them on, and a mouse can then drive them for testing; "off" never). DESIGN.md §4 only covers keyboard and gamepad, so this is an addition. Laptops with touchscreens keep the desktop controls: the first version also checked for any touch support, which showed the touch UI (and hid the perf readout) on desktop.
+- **Layout for a landscape phone:**
+  - Left thumb: a floating move stick that appears wherever the thumb lands on the left 45% of the screen. Pushing it to the rim boosts, since thumbs are busy, and a BOOST button on the left toggles boost on and off.
+  - Dragging anywhere else turns the camera. It turns the same way as the mouse, at `controls.touchLookSensitivity` × the mouse speed per pixel.
+  - Right thumb: a cluster of round buttons. PUNCH is the big one; around it are FLY (tap = hop, hold = charge a leap, double-tap = take off, hold while flying = up), DOWN, GRAB, SLAM, HEAT, ICE, BALL and NOVA (glows when the meter is full).
+  - MENU (debug panel) and FPS (perf readout) are small buttons top-left.
+- **Buttons hold the same raw inputs the bindings map** (new `Touch:*` ids in `config/controls.ts`), so every hold, tap and double-tap behaves exactly like its key, with no separate code path per power.
+- **The perf readout starts hidden on touch devices.** It covers too much of a phone screen; the FPS button shows it.
+- **Landscape only:**
+  - On touch devices a prompt covers the game in portrait ("Turn your device sideways").
+  - A "Tap to play" screen goes fullscreen and locks the orientation to landscape where the browser allows it (Android Chrome). iOS Safari and embedded frames can't lock, so the prompt is what enforces it there.
+  - A web app manifest (`display: fullscreen`, `orientation: landscape`) covers "Add to Home Screen" installs.
+  - Desktops are left alone: a narrow browser window on a computer still plays.
+- **Page zoom and browser gestures are off** (viewport `user-scalable=no`, `touch-action: none`, no overscroll), so pinches and swipes go to the game.
+- **Not verified on a real phone yet:** the smoke test emulates a touch phone (844 × 390) in desktop Chrome. Real-device performance is unknown; phones vary hugely, and the Low preset with the pixel ratio capped at 1 is the starting point.
+- **Known flake (older than this change):** the M3 smoke test's fly-into-the-hole check fails about 1 run in 3 on this laptop, including on the committed M8 build. The scripted flight sometimes misses the breach, so the room it checks is never furnished. It now waits up to 3 s for furnishing, which fixes the timing part. Making the flight itself aim at the hole is a test-only fix for later.

@@ -6,3 +6,4 @@ assets-src/mixamo/
 assets-src/audio/*
 !assets-src/audio/.gitkeep
 *.log
+assets-src/quaternius-*/

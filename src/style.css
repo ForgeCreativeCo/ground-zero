@@ -314,3 +314,245 @@ body {
     animation: none;
   }
 }
+
+/* --- Touch controls (ui/touchControls.ts): phones and tablets, landscape. ----------------- */
+html.touch,
+html.touch body {
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+html.touch #hint {
+  display: none;
+}
+
+#touch-ui {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  touch-action: none;
+}
+
+.touch-stick {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+.touch-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46%;
+  height: 46%;
+  border-radius: 50%;
+  background: rgba(241, 236, 228, 0.55);
+  transform: translate(-50%, -50%);
+}
+
+.touch-btn {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  background: rgba(15, 16, 18, 0.42);
+  color: #f1ece4;
+  font:
+    600 11px/1 ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+  letter-spacing: 0.06em;
+  padding: 0;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-btn.down,
+.touch-btn.on {
+  background: rgba(242, 163, 58, 0.55);
+  border-color: #f2a33a;
+}
+
+.touch-big {
+  width: 84px;
+  height: 84px;
+  font-size: 13px;
+}
+
+.touch-mid {
+  width: 58px;
+  height: 58px;
+}
+
+.touch-small {
+  width: 46px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+/* Right-hand cluster: three rows above the bottom-right corner. */
+.touch-punch {
+  right: calc(22px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+}
+.touch-slam {
+  right: calc(120px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+}
+.touch-grab {
+  right: calc(188px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+}
+.touch-jump {
+  right: calc(34px + env(safe-area-inset-right, 0px));
+  bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+}
+.touch-heat {
+  right: calc(102px + env(safe-area-inset-right, 0px));
+  bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+}
+.touch-freeze {
+  right: calc(170px + env(safe-area-inset-right, 0px));
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+.touch-down {
+  right: calc(34px + env(safe-area-inset-right, 0px));
+  bottom: calc(186px + env(safe-area-inset-bottom, 0px));
+}
+.touch-energy {
+  right: calc(102px + env(safe-area-inset-right, 0px));
+  bottom: calc(168px + env(safe-area-inset-bottom, 0px));
+}
+.touch-nova {
+  right: calc(170px + env(safe-area-inset-right, 0px));
+  bottom: calc(164px + env(safe-area-inset-bottom, 0px));
+}
+.touch-heat {
+  color: #ffb070;
+}
+.touch-freeze {
+  color: #bfe3ff;
+}
+.touch-energy {
+  color: #c7d8ff;
+}
+.touch-nova.ready {
+  border-color: #ffd27a;
+  color: #fff4d6;
+  box-shadow: 0 0 12px #f2a33a;
+}
+
+/* Left side: boost toggle; top-left: menu (debug panel) and the perf readout. */
+.touch-boost {
+  left: calc(22px + env(safe-area-inset-left, 0px));
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+}
+.touch-debug {
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  top: calc(10px + env(safe-area-inset-top, 0px));
+}
+.touch-perf {
+  left: calc(62px + env(safe-area-inset-left, 0px));
+  top: calc(10px + env(safe-area-inset-top, 0px));
+}
+
+/* Tap to play (fullscreen + landscape lock need a tap). */
+#touch-start {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  padding: 24px;
+  background: rgba(15, 16, 18, 0.82);
+  color: #f1ece4;
+  text-align: center;
+  font:
+    13px/1.5 ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+}
+.touch-start-title {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  color: #f2a33a;
+}
+#touch-start-btn {
+  font:
+    600 16px ui-monospace,
+    'Cascadia Mono',
+    Consolas,
+    monospace;
+  color: #0f1012;
+  background: #f2a33a;
+  border: 0;
+  border-radius: 6px;
+  padding: 14px 28px;
+}
+
+/* Portrait: the game is covered by a prompt to turn the device sideways. */
+#rotate-prompt {
+  display: none;
+}
+@media (orientation: portrait) {
+  html.touch.landscape-only #rotate-prompt {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    padding: 24px;
+    background: #0f1012;
+    color: #f1ece4;
+    text-align: center;
+    font:
+      15px/1.4 ui-monospace,
+      'Cascadia Mono',
+      Consolas,
+      monospace;
+  }
+}
+#rotate-prompt p {
+  margin: 0;
+}
+#rotate-prompt .rotate-sub {
+  color: #a39d92;
+  font-size: 12px;
+}
+.rotate-phone {
+  width: 44px;
+  height: 76px;
+  border: 3px solid #f2a33a;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  animation: rotate-hint 2.4s ease-in-out infinite;
+}
+@keyframes rotate-hint {
+  0%,
+  30% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rotate-phone {
+    animation: none;
+    transform: rotate(-90deg);
+  }
+}

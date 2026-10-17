@@ -30,6 +30,8 @@ export class Input {
   private pad = new Map<string, number>();
   private mouseAccum = { x: 0, y: 0 };
   private stickScratch = { x: 0, y: 0 };
+  /** On-screen stick (ui/touchControls.ts), camera-relative like move. */
+  private touchMove = { x: 0, y: 0 };
   private readonly raw = (id: string): number => {
     if (this.held.has(id) || this.tapped.has(id)) return 1;
     return this.pad.get(id) ?? 0;
@@ -64,8 +66,8 @@ export class Input {
     const lx = this.pad.get('Axis:LX') ?? 0;
     const ly = this.pad.get('Axis:LY') ?? 0;
     applyDeadzone(lx, ly, config.controls.stickDeadzone, this.stickScratch);
-    let mx = kx + this.stickScratch.x;
-    let my = ky - this.stickScratch.y;
+    let mx = kx + this.stickScratch.x + this.touchMove.x;
+    let my = ky - this.stickScratch.y + this.touchMove.y;
     const len = Math.hypot(mx, my);
     if (len > 1) {
       mx /= len;
@@ -198,6 +200,19 @@ export class Input {
     this.held.clear();
     this.tapped.clear();
   };
+
+  /** On-screen move stick: x = right, y = forward (-1..1). */
+  setTouchMove(x: number, y: number) {
+    this.touchMove.x = x;
+    this.touchMove.y = y;
+  }
+
+  /** On-screen look drag (pixels), added to the frame's look like mouse movement. */
+  addTouchLook(dx: number, dy: number) {
+    const k = config.controls.touchLookSensitivity;
+    this.mouseAccum.x += dx * k;
+    this.mouseAccum.y += dy * k;
+  }
 
   /** Test hook: simulate a raw input being held (Playwright, unit tests). */
   setHeld(id: string, held: boolean) {

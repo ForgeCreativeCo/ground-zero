@@ -1,0 +1,9 @@
+{
+  "name": "GROUND ZERO",
+  "short_name": "Ground Zero",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0f1012",
+  "theme_color": "#0f1012",
+  "start_url": "./"
+}

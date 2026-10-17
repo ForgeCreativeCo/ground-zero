@@ -60,7 +60,15 @@ test('M3: furnished interiors, fire spread, power failure, collapse fires', asyn
     [p.x, p.y + 1, p.z],
   );
   expect(unit).not.toBeNull();
-  expect(unit!.spawned).toBe(true);
+  // Furnishing is queued (a few rooms a frame); give it a moment under load.
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(([x, y, z]) => window.__GZ__.unitAt(x!, y!, z!), [p.x, p.y + 1, p.z]))
+          ?.spawned,
+      { timeout: 3000 },
+    )
+    .toBe(true);
   await page.evaluate(() => window.__GZ__.setLook(Math.PI - 0.6, -0.15));
   await page.waitForTimeout(400);
   await shot(page, 'm3-02-inside');

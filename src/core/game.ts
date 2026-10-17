@@ -29,6 +29,7 @@ import { DebugPanel } from '../ui/debugPanel';
 import { Hud } from '../ui/hud';
 import { emptySnapshot, PerfHud, type PerfSnapshot } from '../ui/perfHud';
 import { Speedometer } from '../ui/speedometer';
+import { TouchControls, wantsTouchUi } from '../ui/touchControls';
 import { GrayboxCity } from '../world/city';
 import { Ground } from '../world/ground';
 import { events } from './events';
@@ -82,6 +83,8 @@ export class Game {
   perfHud!: PerfHud;
   speedometer!: Speedometer;
   debugPanel!: DebugPanel;
+  /** On-screen controls on phones and tablets (null on desktop). */
+  touch: TouchControls | null = null;
   ready = false;
   frame = 0;
   /** Interpolated hero feet position used for rendering this frame. */
@@ -201,6 +204,12 @@ export class Game {
     this.hud = new Hud(this.root);
     this.perfHud = new PerfHud(this.root);
     this.speedometer = new Speedometer(this.root);
+    if (wantsTouchUi()) {
+      this.touch = new TouchControls(document.body, this.input);
+      if (config.controls.landscapeOnly) document.documentElement.classList.add('landscape-only');
+      // The perf readout covers a phone screen: start it hidden (the FPS button shows it).
+      config.debug.showPerfHud = false;
+    }
     this.debugPanel = new DebugPanel(this.root, this.seed, {
       spawnTestBodies: () => this.spawnTestBodies(config.debug.testBodiesPerSpawn),
       clearTestBodies: () => this.testBodies.clear(),
@@ -295,6 +304,7 @@ export class Game {
       this.recorder.push(realDt * 1000);
     }
 
+    this.touch?.update();
     this.input.update(time);
     this.nova.beginFrame();
     if (this.input.action('debugPanel').pressed) this.debugPanel.toggle();
@@ -434,6 +444,7 @@ export class Game {
     this.interiors.update(simDt, this.heroPos, cam);
     this.fire.update(simDt, cam);
     this.hud.update(realDt, !config.debug.freeCamera && this.strength.inReach());
+    this.touch?.setNovaReady(this.nova.ready && this.nova.phase === 'idle');
     this.hud.novaMeter(this.nova.meter, this.nova.phase === 'windup');
     this.hud.meters(
       this.energy.charging ? Math.max(config.energyBall.minCharge, this.energy.charge) : -1,
