@@ -21,6 +21,7 @@ import { fx, fxMeta } from './fx';
 import { fire, interiors, interiorsMeta, power } from './interiors';
 import { loop, loopMeta } from './loop';
 import { nova, novaMeta } from './nova';
+import { npc, npcMeta } from './npc';
 import { player, playerMeta } from './player';
 import { energyBall, flyThrough, freezeBreath, heatVision, powersMeta } from './powers';
 import type { MetaMap } from './meta';
@@ -33,6 +34,7 @@ import {
   type ConfigTree,
   type ConfigValue,
 } from './store';
+import { traffic, trafficMeta } from './traffic';
 import { world, worldMeta } from './world';
 
 const defaultsTree = {
@@ -63,6 +65,8 @@ const defaultsTree = {
   interiors,
   power,
   fire,
+  npc,
+  traffic,
   debugCamera,
   controls,
   bindings,
@@ -93,6 +97,8 @@ export const meta: MetaMap = {
   ...interiorsMeta,
   ...powersMeta,
   ...novaMeta,
+  ...npcMeta,
+  ...trafficMeta,
   ...debugCameraMeta,
   ...controlsMeta,
   ...budgetsMeta,

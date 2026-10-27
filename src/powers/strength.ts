@@ -1,3 +1,4 @@
+import type RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
 import { config } from '../config';
 import { events } from '../core/events';
@@ -24,13 +25,53 @@ const _d = new THREE.Vector3();
 const _hit = new THREE.Vector3();
 const _chest = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
+const _ex = new THREE.Vector3();
 const _origin = { x: 0, y: 0, z: 0 };
 const _dir = { x: 0, y: 0, z: 0 };
 
+/** Anything the hero can hold and throw: a debris chunk or a vehicle (a rigid body). */
+export interface Holdable {
+  body: RAPIER.RigidBody | null;
+  hx: number;
+  hy: number;
+  hz: number;
+  mass: number;
+  held: boolean;
+  thrown: number;
+  sleep: number;
+  live: boolean;
+}
+
+/** A person or vehicle in front of his fists (M5), found and struck by the game's adapter. */
+export interface ExtraTarget {
+  kind: 'npc' | 'vehicle';
+  id: number;
+}
+
+/** People and vehicles as punch/grab targets (implemented by the game; keeps systems decoupled). */
+export interface ExtraTargets {
+  /** Nearest person or vehicle along the ray within maxT; writes the hit point into out. */
+  find(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxT: number,
+    out: THREE.Vector3,
+  ): ExtraTarget | null;
+  strike(
+    t: ExtraTarget,
+    point: THREE.Vector3,
+    push: THREE.Vector3,
+    damage: number,
+    uppercut: boolean,
+  ): void;
+  grab(t: ExtraTarget): Holdable | null;
+}
+
 interface Target {
-  kind: 'piece' | 'debris' | 'none';
+  kind: 'piece' | 'debris' | 'npc' | 'vehicle' | 'none';
   piece: number;
   item: DebrisItem | null;
+  extra: ExtraTarget | null;
   point: THREE.Vector3;
 }
 
@@ -42,7 +83,9 @@ export class Strength {
   action: HeroAction = 'none';
   /** 0..1 progress of the current action pose. */
   actionT = 0;
-  holding: DebrisItem | null = null;
+  holding: Holdable | null = null;
+  /** People and vehicles (set by the game once they exist). */
+  extra: ExtraTargets | null = null;
   private actionTime = 0;
   private actionDuration = 0.25;
   private combo = 0;
@@ -51,7 +94,13 @@ export class Strength {
   private pressStart = -1;
   private pendingSlam = false;
   private ray: InstanceType<Physics['R']['Ray']>;
-  private target: Target = { kind: 'none', piece: -1, item: null, point: new THREE.Vector3() };
+  private target: Target = {
+    kind: 'none',
+    piece: -1,
+    item: null,
+    extra: null,
+    point: new THREE.Vector3(),
+  };
   /** Camera aim (set each rendered frame). */
   readonly aimOrigin = new THREE.Vector3();
   readonly aimDir = new THREE.Vector3(0, 0, -1);
@@ -140,6 +189,7 @@ export class Strength {
     t.kind = 'none';
     t.piece = -1;
     t.item = null;
+    t.extra = null;
     const p = this.player;
     _chest.set(p.position.x, p.position.y + config.player.height * 0.7, p.position.z);
     const reach = config.strength.reach * reachScale;
@@ -160,6 +210,19 @@ export class Strength {
       undefined,
       p.playerCollider,
     );
+    // People and vehicles in front of his fists (nearer than whatever the ray hit).
+    const ex = this.extra?.find(
+      this.aimOrigin,
+      this.aimDir,
+      hit ? hit.timeOfImpact + 0.3 : maxToi,
+      _ex,
+    );
+    if (ex && _ex.distanceTo(_chest) <= reach) {
+      t.kind = ex.kind;
+      t.extra = ex;
+      t.point.copy(_ex);
+      return t;
+    }
     if (hit) {
       _hit.copy(this.aimOrigin).addScaledVector(this.aimDir, hit.timeOfImpact);
       if (_hit.distanceTo(_chest) <= reach) {
@@ -225,7 +288,9 @@ export class Strength {
     // Furniture and interior walls in front of his fists (they have no colliders to aim at).
     _tmp.copy(_chest).addScaledVector(this.aimDir, config.strength.reach * 0.6);
     this.destruction.propDamage?.(_tmp.x, _tmp.y, _tmp.z, 1.5, damage * 3, _d.x, _d.y, _d.z);
-    if (t.kind === 'piece') {
+    if (t.extra) {
+      this.extra?.strike(t.extra, t.point, _d, damage, uppercut);
+    } else if (t.kind === 'piece') {
       this.destruction.hitAt(t.point.x, t.point.y, t.point.z, 1.3, damage, _d.x, _d.y, _d.z);
     } else if (t.kind === 'debris' && t.item) {
       this.destruction.debris.push(t.item, _d.x, _d.y + (uppercut ? lift * 0.5 : 2), _d.z);
@@ -251,8 +316,12 @@ export class Strength {
   private tryGrab() {
     const t = this.findTarget(1.3);
     const s = config.strength;
-    let item: DebrisItem | null = null;
-    if (t.kind === 'debris' && t.item && t.item.body && t.item.mass <= s.maxGrabMass) item = t.item;
+    let item: Holdable | null = null;
+    if (t.extra) {
+      const h = this.extra?.grab(t.extra) ?? null;
+      if (h && h.mass <= s.maxGrabMass) item = h;
+    } else if (t.kind === 'debris' && t.item && t.item.body && t.item.mass <= s.maxGrabMass)
+      item = t.item;
     else if (t.kind === 'piece') {
       const st = this.destruction.city.store;
       const kind = st.kind[t.piece]!;

@@ -22,12 +22,16 @@ export class Hud {
   private nova: HTMLDivElement;
   private novaFill: HTMLSpanElement;
   private novaKey = '';
+  private casualtyEl: HTMLDivElement;
+  private casualtyValue: HTMLSpanElement;
+  private casualtyShown = -1;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
     this.root.id = 'hud';
     this.root.innerHTML =
       '<div class="hud-bill"><span class="hud-bill-label">DAMAGE</span><span class="hud-bill-value">$0</span></div>' +
+      '<div class="hud-bill hud-casualties"><span class="hud-bill-label">CASUALTIES</span><span class="hud-casualty-value">0</span></div>' +
       '<div class="hud-nova"><span class="hud-bill-label">NOVA</span><span class="nova-track"><span class="nova-fill"></span></span></div>';
     this.reticle = document.createElement('div');
     this.reticle.id = 'reticle';
@@ -45,9 +49,19 @@ export class Hud {
     this.chargeEl = this.meterRoot.querySelector('.charge')!;
     this.chargeFill = this.chargeEl.querySelector('.meter-fill')!;
     this.bill = this.root.querySelector('.hud-bill-value')!;
+    this.casualtyEl = this.root.querySelector('.hud-casualties')!;
+    this.casualtyValue = this.root.querySelector('.hud-casualty-value')!;
     this.nova = this.root.querySelector('.hud-nova')!;
     this.novaFill = this.root.querySelector('.nova-fill')!;
     events.on('damage:bill', ({ total }) => (this.target = total));
+  }
+
+  /** Casualty counter (DESIGN.md §10.1; Appendix B: whether to show it is the user's call). */
+  casualties(n: number, show: boolean) {
+    this.casualtyEl.hidden = !show;
+    if (n === this.casualtyShown) return;
+    this.casualtyShown = n;
+    this.casualtyValue.textContent = n.toLocaleString('en-US');
   }
 
   /** Per frame: the bill ticks up toward the real total. */

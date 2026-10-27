@@ -216,6 +216,16 @@ export class InteriorSystem {
     this.unitProps.set(u, list);
     this.applyFireLook(u);
     this.applyLights(u);
+    // People in it (M5).
+    events.emit('interior:unitSpawned', {
+      unit: u,
+      x0: box.x0,
+      x1: box.x1,
+      y0: box.y0,
+      z0: box.z0,
+      z1: box.z1,
+      retail: this.units.type[u] === UNIT.retail,
+    });
   }
 
   /** Interior walls on the unit's internal edges, each with a door gap (DESIGN.md §7.1). */
@@ -267,6 +277,7 @@ export class InteriorSystem {
     for (const id of list) this.props.remove(id);
     this.unitProps.delete(u);
     this.units.flags[u]! &= ~UFLAG.spawned;
+    events.emit('interior:unitDespawned', { unit: u });
     // Forget its wall edges so a neighbour (or a respawn) builds them again.
     const [bi, f, i, j] = this.units.decode(u);
     for (const k of [

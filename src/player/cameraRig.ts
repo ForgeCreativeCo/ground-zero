@@ -3,7 +3,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { config } from '../config';
 import { events } from '../core/events';
 import type { Input } from '../core/input';
-import type { Physics } from '../physics/physics';
+import { PLAYER_QUERY_GROUPS, type Physics } from '../physics/physics';
 import { smoothstep } from './flightModel';
 
 const _pivot = new THREE.Vector3();
@@ -179,7 +179,7 @@ export class CameraRig {
       maxLen,
       true,
       R.QueryFilterFlags.EXCLUDE_DYNAMIC,
-      undefined,
+      PLAYER_QUERY_GROUPS,
       this.exclude,
     );
     if (!hit) return maxLen;

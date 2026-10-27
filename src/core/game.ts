@@ -8,6 +8,13 @@ import { EnergyBallFx } from '../fx/energyBallFx';
 import { NovaFx } from '../fx/novaFx';
 import { FireSystem } from '../fx/fire';
 import { InteriorSystem } from '../interiors/interiorSystem';
+import { loadCharacterAssets } from '../npc/characterAssets';
+import { CivilianSystem } from '../npc/civilians';
+import { CrowdRenderer } from '../npc/crowdRenderer';
+import { loadVehicleAssets } from '../vehicles/vehicleAssets';
+import { VehicleRenderer } from '../vehicles/vehicleRenderer';
+import { VehicleSystem } from '../vehicles/traffic';
+import type { ExtraTargets } from '../powers/strength';
 import { EnergyBall } from '../powers/energyBall';
 import { FlyThrough } from '../powers/flyThrough';
 import { FreezeBreath } from '../powers/freezeBreath';
@@ -32,6 +39,8 @@ import { Speedometer } from '../ui/speedometer';
 import { TouchControls, wantsTouchUi } from '../ui/touchControls';
 import { GrayboxCity } from '../world/city';
 import { Ground } from '../world/ground';
+import { buildStreets, type Streets } from '../world/streets';
+import { StreetProps } from '../world/streetProps';
 import { events } from './events';
 import { FrameStats } from './frameStats';
 import { Input } from './input';
@@ -80,6 +89,15 @@ export class Game {
   energyFx!: EnergyBallFx;
   nova!: Nova;
   novaFx!: NovaFx;
+  streets!: Streets;
+  crowd!: CrowdRenderer;
+  civilians!: CivilianSystem;
+  vehicles!: VehicleSystem;
+  vehicleRenderer!: VehicleRenderer;
+  /** Nova front tracking for people and vehicles (centre, last radius processed; -1 = none). */
+  private novaCentre = new THREE.Vector3();
+  private novaDone = -1;
+  private debrisCheck = 0;
   perfHud!: PerfHud;
   speedometer!: Speedometer;
   debugPanel!: DebugPanel;
@@ -89,6 +107,8 @@ export class Game {
   frame = 0;
   /** Interpolated hero feet position used for rendering this frame. */
   readonly heroPos = new THREE.Vector3();
+  /** M5 CPU cost per frame (ms, smoothed): people sim/draw, traffic sim/draw. */
+  readonly m5ms = { npcSim: 0, npcDraw: 0, vehSim: 0, vehDraw: 0 };
 
   private simLoop: FixedStepLoop;
   /** The debug camera ignores pause/time scale, so it has its own fixed loop. */
@@ -201,6 +221,7 @@ export class Game {
     this.effects.decals.pieceStanding = (id) => this.destruction.city.store.isStatic(id);
     events.on('player:tunnelEnter', () => (this.hitchTimer = config.flyThrough.hitchTime));
     console.log('[boot] destruction', (performance.now() - tD).toFixed(0), 'ms');
+    await this.initPeople();
     this.hud = new Hud(this.root);
     this.perfHud = new PerfHud(this.root);
     this.speedometer = new Speedometer(this.root);
@@ -242,6 +263,124 @@ export class Game {
     events.emit('city:reset', { seed: this.seed });
     this.renderer.setAnimationLoop(this.tick);
     void this.warmUp();
+  }
+
+  /** Humans and traffic (M5). */
+  private async initPeople() {
+    const t0 = performance.now();
+    this.streets = buildStreets(
+      this.city.layout,
+      { ...config.city, laneOffsets: config.traffic.laneOffsets },
+      this.seed,
+    );
+    const [assets, vAssets] = await Promise.all([loadCharacterAssets(), loadVehicleAssets()]);
+    const c = config.npc;
+    const cap = c.count + c.corpseCap + 160;
+    this.crowd = new CrowdRenderer(this.scene, assets, [
+      Math.max(1, config.budgets.lod0Characters),
+      Math.max(1, c.lod1Max),
+      cap,
+    ]);
+    const props = new StreetProps(this.scene, this.city.layout, this.seed);
+    this.civilians = new CivilianSystem(
+      this.city.layout,
+      this.streets,
+      assets,
+      this.crowd,
+      this.destruction.debris,
+      props.spots,
+    );
+    // Breached rooms have people in them; cleared rooms take their calm occupants along.
+    events.on('interior:unitSpawned', (e) =>
+      this.civilians.spawnOccupants(e.unit, e.x0, e.x1, e.y0, e.z0, e.z1, e.retail),
+    );
+    events.on('interior:unitDespawned', (e) => this.civilians.despawnOccupants(e.unit));
+    const t = config.traffic;
+    let lights = 0;
+    for (const n of this.streets.nodes)
+      if (n.signal) lights += n.edges.filter((e) => e >= 0).length;
+    this.vehicleRenderer = new VehicleRenderer(
+      this.scene,
+      vAssets,
+      t.driving + t.parked,
+      lights,
+      t.wreckMeshes,
+    );
+    this.vehicles = new VehicleSystem(
+      this.physics,
+      this.streets,
+      vAssets,
+      this.vehicleRenderer,
+      this.destruction,
+      this.effects,
+      this.fire,
+      this.civilians,
+    );
+    const s = config.player.spawn;
+    if (c.enabled) this.civilians.populate(s[0], s[2]);
+    if (t.enabled) this.vehicles.populate(s[0], s[2]);
+    this.strength.extra = this.strikeTargets();
+    events.on('power:energyBlast', (e) =>
+      this.civilians.blast(
+        e.x,
+        e.y,
+        e.z,
+        e.radius * 1.3,
+        500 * (0.5 + e.charge),
+        20 * (0.5 + e.charge),
+        'energy',
+      ),
+    );
+    events.on('cluster:crush', (e) =>
+      this.civilians.crush(e.x, e.y, e.z, 4 + Math.cbrt(e.mass) * 0.08),
+    );
+    events.on('nova:release', (e) => {
+      this.novaCentre.set(e.x, e.y, e.z);
+      this.novaDone = 0;
+    });
+    console.log('[boot] people', (performance.now() - t0).toFixed(0), 'ms');
+  }
+
+  /** People and vehicles as punch / grab targets for the strength power. */
+  private strikeTargets(): ExtraTargets {
+    const people = this.civilians;
+    const veh = this.vehicles;
+    const hit = new THREE.Vector3();
+    return {
+      find: (o, d, maxT, out) => {
+        const v = veh.rayHit(o.x, o.y, o.z, d.x, d.y, d.z, maxT, hit);
+        const vt = v ? hit.distanceTo(o) : maxT;
+        // People: the ray is long (camera to fists), so search along it from the camera.
+        const i = people.punchRay(o.x, o.y, o.z, d.x, d.y, d.z, vt);
+        if (i >= 0) {
+          const t = Math.max(0, (people.x[i]! - o.x) * d.x + (people.z[i]! - o.z) * d.z);
+          out.set(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t);
+          return { kind: 'npc', id: i };
+        }
+        if (v) {
+          out.copy(hit);
+          return { kind: 'vehicle', id: v.id };
+        }
+        return null;
+      },
+      strike: (t, point, push, damage, uppercut) => {
+        if (t.kind === 'npc') {
+          const k = config.npc.punchLaunch;
+          people.hurt(
+            t.id,
+            damage * 4,
+            push.x * k,
+            push.y * k + (uppercut ? 14 : 4),
+            push.z * k,
+            'punch',
+          );
+        } else {
+          const v = veh.list[t.id]!;
+          veh.punch(v, point.x, point.y, point.z, push.x, push.y, push.z, damage);
+        }
+      },
+      grab: (t) => (t.kind === 'vehicle' ? veh.grab(veh.list[t.id]!) : null),
+    };
   }
 
   /** True once every shader that can appear later has been compiled. */
@@ -443,9 +582,18 @@ export class Game {
     this.destruction.frameUpdate(alpha);
     this.interiors.update(simDt, this.heroPos, cam);
     this.fire.update(simDt, cam);
+    const m5 = this.m5ms;
+    const t0 = performance.now();
+    this.civilians.frameUpdate(alpha, cam);
+    const t1 = performance.now();
+    this.vehicles.frameUpdate(alpha, cam, simDt);
+    const t2 = performance.now();
+    m5.npcDraw += (t1 - t0 - m5.npcDraw) * 0.05;
+    m5.vehDraw += (t2 - t1 - m5.vehDraw) * 0.05;
     this.hud.update(realDt, !config.debug.freeCamera && this.strength.inReach());
     this.touch?.setNovaReady(this.nova.ready && this.nova.phase === 'idle');
     this.hud.novaMeter(this.nova.meter, this.nova.phase === 'windup');
+    this.hud.casualties(this.civilians.casualties, config.npc.showCasualties);
     this.hud.meters(
       this.energy.charging ? Math.max(config.energyBall.minCharge, this.energy.charge) : -1,
       this.heat.meter.level,
@@ -481,6 +629,7 @@ export class Game {
     if (this.player.speed >= config.player.sonicThreshold * 0.9) this.flyThrough.lookAhead(dt);
     this.physics.step();
     this.destruction.fixedUpdate(dt);
+    this.peopleAndTraffic(dt);
     if (!config.debug.freeCamera) {
       const pv = this.player.velocity;
       const pp = this.player.position;
@@ -497,12 +646,84 @@ export class Game {
     this.input.consumeLatches();
   };
 
+  /** People and vehicles (M5): powers, the hero, debris and the Nova reach them here. */
+  private peopleAndTraffic(dt: number) {
+    const pp = this.player.position;
+    const pv = this.player.velocity;
+    const free = config.debug.freeCamera;
+    if (!free) this.civilians.heroPass(pp.x, pp.y, pp.z, pv.x, pv.y, pv.z);
+    // Heat vision burns people and cooks cars; freeze breath turns both to ice.
+    const h = this.heat;
+    if (h.firing && h.ramp > 0.5) {
+      this.civilians.beam(h.hit.x, h.hit.y, h.hit.z, dt);
+      const v = this.vehicles.atPoint(h.hit.x, h.hit.y, h.hit.z, 0.6);
+      if (v) this.vehicles.heat(v, dt);
+    }
+    const b = this.breath;
+    if (b.firing) {
+      const fb = config.freezeBreath;
+      const cosHalf = Math.cos((fb.coneAngleDeg * Math.PI) / 180);
+      const m = b.mouth;
+      const d = b.aimDir;
+      this.civilians.freezeCone(m.x, m.y, m.z, d.x, d.y, d.z, fb.range, cosHalf, dt);
+      this.vehicles.freezeCone(m.x, m.y, m.z, d.x, d.y, d.z, fb.range, cosHalf, dt);
+    }
+    // The Nova front sweeps outward through people and traffic.
+    if (this.novaDone >= 0) {
+      const R = this.nova.radius;
+      const end = R * config.nova.fringeFraction;
+      const front = this.nova.phase === 'wave' ? this.nova.front : end;
+      const c = this.novaCentre;
+      const to = Math.min(front, end);
+      if (to > this.novaDone) {
+        this.civilians.novaRing(c.x, c.y, c.z, this.novaDone, to, R);
+        this.vehicles.novaRing(c.x, c.y, c.z, this.novaDone, to, R);
+        this.novaDone = to;
+      }
+      if (to >= end) this.novaDone = -1;
+    }
+    // Flying debris hits people.
+    if (++this.debrisCheck % 2 === 0) this.debrisHitsPeople(dt);
+    const t0 = performance.now();
+    this.civilians.fixedUpdate(dt, pp.x, pp.y, pp.z, false);
+    const t1 = performance.now();
+    this.m5ms.npcSim += (t1 - t0 - this.m5ms.npcSim) * 0.05;
+    this.vehicles.fixedUpdate(
+      dt,
+      pp.x,
+      pp.y,
+      pp.z,
+      free ? 0 : pv.x,
+      free ? 0 : pv.y,
+      free ? 0 : pv.z,
+    );
+    this.m5ms.vehSim += (performance.now() - t1 - this.m5ms.vehSim) * 0.05;
+  }
+
+  private debrisHitsPeople(dt: number) {
+    const civ = this.civilians;
+    this.destruction.debris.forEachLive((it) => {
+      if (it.mass < 40 || it.parked || it.fade >= 0) return;
+      const vx = (it.pos.x - it.prevPos.x) / dt;
+      const vy = (it.pos.y - it.prevPos.y) / dt;
+      const vz = (it.pos.z - it.prevPos.z) / dt;
+      const sp2 = vx * vx + vy * vy + vz * vz;
+      if (sp2 < 36) return;
+      const r = Math.max(it.hx, it.hy, it.hz) + 0.4;
+      civ.forEachNear(it.pos.x, it.pos.z, r, (i) => {
+        if (Math.abs(civ.y[i]! + 0.9 - it.pos.y) > r + 0.9) return;
+        civ.hurt(i, 0.5 * it.mass * sp2 * 0.004, vx, 2, vz, 'debris');
+      });
+    });
+  }
+
   /** Ground slam / dive slam (DESIGN.md §6.4). */
   slamAt(x: number, y: number, z: number, speed: number, dive: boolean) {
     const c = config.slam;
     const radius = Math.min(c.maxRadius, c.radius + speed * c.radiusPerSpeed);
     const damage = c.damage + speed * c.damagePerSpeed;
     this.destruction.blast(x, y + 1, z, radius, damage, c.launch * (1 + speed / 80));
+    this.civilians.blast(x, y + 1, z, radius * 1.3, damage, c.launch * (1 + speed / 80), 'slam');
     this.destruction.shatterWindows(x, y + 6, z, radius * c.windowRadiusScale);
     const onGround = y < 1.5;
     const craterR = c.craterRadius + speed * c.craterRadiusPerSpeed;
@@ -646,6 +867,9 @@ export class Game {
     s.debrisActive = ds.active;
     s.debrisVisual = ds.visual;
     s.rubble = ds.rubble;
+    s.charsLod0 = this.crowd.tierCounts[0]!;
+    s.charsLod1 = this.crowd.tierCounts[1]!;
+    s.charsLod2 = this.crowd.tierCounts[2]!;
     s.clusters = ds.clusters;
     this.recorder.observe(s);
     this.statsTimer -= realDt;

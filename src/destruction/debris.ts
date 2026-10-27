@@ -710,6 +710,11 @@ export class DebrisSystem {
     }
   }
 
+  /** Every live item (people and vehicles check flying debris against themselves). */
+  forEachLive(fn: (it: DebrisItem) => void) {
+    for (const it of this.live) fn(it);
+  }
+
   /** Items within r of a point (for blasts and grabs). */
   forEachNear(x: number, y: number, z: number, r: number, fn: (it: DebrisItem) => void) {
     const r2 = r * r;

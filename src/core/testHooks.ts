@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { PLAYER_QUERY_GROUPS } from '../physics/physics';
 import type { Game } from './game';
 import { runPerfPath } from './perfRun';
 
@@ -40,7 +41,7 @@ export function installTestHooks(game: Game) {
         { x: p.x, y: p.y, z: p.z },
         true,
         game.physics.R.QueryFilterFlags.EXCLUDE_DYNAMIC,
-        undefined,
+        PLAYER_QUERY_GROUPS,
         game.player.playerCollider,
       );
       return !!hit?.isInside;
@@ -215,6 +216,54 @@ export function installTestHooks(game: Game) {
       return { staticPieces: n, total: b.count };
     },
     bodySample: (i: number) => game.testBodies.debugSample(i),
+    /** Humans (M5): counts and the state of each tier. */
+    npc: () => {
+      const c = game.civilians;
+      return {
+        living: c.living,
+        corpses: c.corpses,
+        casualties: c.casualties,
+        ...c.stats,
+        tiers: [...game.crowd.tierCounts],
+      };
+    },
+    /** People near a point: index, position, state. */
+    npcNear: (x: number, z: number, r: number) => {
+      const c = game.civilians;
+      const out: { i: number; x: number; y: number; z: number; state: number; yaw: number }[] = [];
+      c.forEachNear(x, z, r, (i) =>
+        out.push({ i, x: c.x[i]!, y: c.y[i]!, z: c.z[i]!, state: c.state[i]!, yaw: c.yaw[i]! }),
+      );
+      return out;
+    },
+    npcAlarm: (x: number, y: number, z: number, r: number) => game.civilians.alarm(x, y, z, r, 1),
+    /** Vehicles (M5): counters and every vehicle's mode and position. */
+    vehicles: () => {
+      const v = game.vehicles;
+      return {
+        ...v.stats,
+        total: v.list.length,
+        list: v.list.map((o) => ({
+          id: o.id,
+          type: o.type,
+          mode: o.mode,
+          x: o.x,
+          y: o.y,
+          z: o.z,
+          speed: o.speed,
+          parked: o.parked,
+          wreck: !!o.wreck,
+          hp: o.hp,
+        })),
+      };
+    },
+    /** M5 CPU cost (ms per frame / per step, smoothed). */
+    m5ms: () => ({ ...game.m5ms }),
+    vehicleExplode: (id: number) => game.vehicles.explode(game.vehicles.list[id]!),
+    vehicleBlast: (x: number, y: number, z: number, r: number, dmg: number, launch: number) =>
+      game.vehicles.blast(x, y, z, r, dmg, launch),
+    npcBlast: (x: number, y: number, z: number, r: number, dmg: number, launch: number) =>
+      game.civilians.blast(x, y, z, r, dmg, launch),
   };
   (window as unknown as { __GZ__: typeof hooks }).__GZ__ = hooks;
   return hooks;

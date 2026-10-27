@@ -2,7 +2,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { config } from '../config';
 import { events, type PlayerState } from '../core/events';
 import type { Input } from '../core/input';
-import type { Physics } from '../physics/physics';
+import { PLAYER_QUERY_GROUPS, type Physics } from '../physics/physics';
 import {
   approachSpeed,
   leapSpeed,
@@ -359,7 +359,7 @@ export class PlayerController {
       _delta.x = this.velocity.x * sub;
       _delta.y = this.velocity.y * sub;
       _delta.z = this.velocity.z * sub;
-      this.kcc.computeColliderMovement(this.collider, _delta, flags, undefined, filter);
+      this.kcc.computeColliderMovement(this.collider, _delta, flags, PLAYER_QUERY_GROUPS, filter);
       const mv = this.kcc.computedMovement();
       const hy = p.height / 2;
       const ax = this.position.x;
@@ -488,7 +488,7 @@ export class PlayerController {
       reach,
       true,
       R.QueryFilterFlags.EXCLUDE_DYNAMIC,
-      undefined,
+      PLAYER_QUERY_GROUPS,
       this.collider,
       undefined,
       this.penetrating ? this.passFilter : undefined,
@@ -580,7 +580,7 @@ export class PlayerController {
       _center,
       true,
       this.physics.R.QueryFilterFlags.EXCLUDE_DYNAMIC,
-      undefined,
+      PLAYER_QUERY_GROUPS,
       this.collider,
     );
     const inside = !!proj?.isInside;
@@ -603,6 +603,7 @@ export class PlayerController {
         this.collider,
         _up,
         this.physics.R.QueryFilterFlags.EXCLUDE_DYNAMIC,
+        PLAYER_QUERY_GROUPS,
       );
       if (this.kcc.computedMovement().y > 0.2) {
         this.stuck = 0;
@@ -619,7 +620,7 @@ export class PlayerController {
       1200,
       true,
       this.physics.R.QueryFilterFlags.EXCLUDE_DYNAMIC,
-      undefined,
+      PLAYER_QUERY_GROUPS,
       this.collider,
     );
     const top = hit ? _center.y + 600 - hit.timeOfImpact : this.position.y + 1;

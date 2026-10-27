@@ -11,6 +11,13 @@ test.use({ viewport: { width: 1920, height: 1080 } });
 test('perf path stays within budget', async ({ page }) => {
   const errors = trackErrors(page);
   // Defaults are the Low preset. PERF_QUALITY=high mirrors QUALITY_HIGH in src/ui/debugPanel.ts.
+  // PERF_OVERRIDES='{"npc.enabled":false}' runs with extra config overrides (A/B checks).
+  if (process.env.PERF_OVERRIDES && process.env.PERF_QUALITY !== 'high') {
+    await page.addInitScript(
+      (o) => localStorage.setItem('ground-zero:config-overrides', o),
+      process.env.PERF_OVERRIDES,
+    );
+  }
   if (process.env.PERF_QUALITY === 'high') {
     await page.addInitScript(() =>
       localStorage.setItem(
@@ -37,6 +44,7 @@ test('perf path stays within budget', async ({ page }) => {
     budgets: window.__GZ__.config.budgets,
   }));
   await shot(page, 'm0-perf-end');
+  console.log('M5 cost (ms)', JSON.stringify(await page.evaluate(() => window.__GZ__.m5ms())));
 
   const report = { ...info, viewport: '1920x1080', ...result, limits: limits.perf };
   mkdirSync('test-results', { recursive: true });

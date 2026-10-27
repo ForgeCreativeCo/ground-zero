@@ -173,6 +173,15 @@ body {
   color: #f2a33a;
 }
 
+#hud .hud-casualty-value {
+  font-size: 16px;
+  color: #d9534a;
+}
+
+#hud .hud-casualties[hidden] {
+  display: none;
+}
+
 #reticle {
   position: fixed;
   left: 50%;

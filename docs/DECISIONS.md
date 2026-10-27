@@ -224,3 +224,58 @@ Judgment calls the spec doesn't cover, one line of reasoning each. Newest at the
 - **Page zoom and browser gestures are off** (viewport `user-scalable=no`, `touch-action: none`, no overscroll), so pinches and swipes go to the game.
 - **Not verified on a real phone yet:** the smoke test emulates a touch phone (844 × 390) in desktop Chrome. Real-device performance is unknown; phones vary hugely, and the Low preset with the pixel ratio capped at 1 is the starting point.
 - **Known flake (older than this change):** the M3 smoke test's fly-into-the-hole check fails about 1 run in 3 on this laptop, including on the committed M8 build. The scripted flight sometimes misses the breach, so the room it checks is never furnished. It now waits up to 3 s for furnishing, which fixes the timing part. Making the flight itself aim at the hole is a test-only fix for later.
+
+## M5: Humans and traffic (with the user's Quaternius packs)
+
+- **Assets:** the user supplied three CC0 Quaternius packs instead of the Mixamo downloads in Appendix A: Universal Base Characters (Standard), Realistic Car Pack and Public Transport Pack. They are unzipped into `assets-src/quaternius-*/` (gitignored). `npm run assets` (`scripts/build-assets.mjs`) turns them into `public/assets/characters/` and `public/assets/vehicles/`. The outputs are committed, because the Pages build can't run the pipeline.
+- **Gaps in the packs, and what fills them:**
+  - **Only 2 base bodies** (the free Standard edition has one male and one female; the spec asks for 6–10). Variety comes from: skin tone from light to dark (a tint on the light texture); shirts and trousers painted in the shader (random colours, short or long sleeves, shorts or long trousers, four shoe styles); 6 hair styles plus a beard; 7 hair colours; ±8% height; ±8% build. Crowds read as varied from a distance, but close up the two faces repeat.
+  - **No animations at all.** Every clip is procedural (`src/npc/poses.ts`), authored as rotations off the T-pose in model axes, so it works on any skeleton with these joint names. 18 clips: idle, phone, walk, run, panic run, cower, point, film, sit, fall, prone, crawl, limp, die (backwards), supine, startle, get up, wave for help. They're baked at startup into one half-float bone-matrix texture (`src/npc/animBake.ts`). Gait playback follows actual ground speed, and gait-to-gait switches keep the stride phase so feet don't skip. They're a stand-in for mocap: believable at street distance, stiffer than Mixamo close up. Mixamo clips can't be dropped in directly, because these rigs use Unreal mannequin bone names rather than Mixamo's. A future pipeline step could retarget by name map.
+  - **The bodies are in underwear.** Clothes are painted in the shader from bind-pose landmarks (waist, neckline, sleeve and trouser lengths, shoe line), with the skin texture's muscle normals flattened under cloth. The result looks skin-tight, painted-on; there are no separate clothing meshes.
+  - **Realism:** the models are smooth and skinned with PBR textures (normal + roughness), so they meet "never blocky/faceted". They're stylised, though, short of §9.1's "most realistic achievable". Better character assets can replace them through the pipeline with no code changes beyond the joint-name map.
+  - **The car pack is low-poly and faceted.** That's allowed (the no-faceted rule is for humans) but plainer than the city. The transport pack is toy-proportioned, so buses are scaled to a real width (2.5 m) and height. The 12 m city bus became a 7.8 m midi bus, because stretching it further would make the wheels oval.
+- **Pipeline (§9.2), what's done and what isn't:**
+  - Done: convert, LODs with meshoptimizer (LOD1 40%, LOD2 12%), and one texture atlas for both bodies, both hair sheets and the eyes (colour+alpha and normal+roughness), so every character shares one material.
+  - KTX2 is replaced by WebP: no KTX encoder is installed here.
+  - Meshopt geometry compression is skipped: it quantizes skinned positions and rewrites the bind matrices that the GPU skinning reads. The raw GLBs are 3.3 MB (characters) and 3.1 MB (vehicles).
+  - **Dismemberment pre-split and wound caps (step 6) are left for M6**, with the rest of gore.
+- **Rendering (§9.3):**
+  - Every tier is GPU-skinned from the baked bone texture, as instanced draws: one per body per LOD, plus one per hair style per LOD (24 draws, each shared by every character in that batch). The shader blends two clips for 0.25 s crossfades.
+  - LOD0 and LOD1 differ from LOD2 only in mesh detail. Animation costs the same at every tier (a few texture reads per vertex), so LOD1 doesn't need a lower update rate.
+  - Only LOD0 casts shadows by default (`npc.shadowTier`).
+  - Real per-character SkinnedMeshes are left for ragdolls in M6.
+- **Navigation:** `recast-navigation` isn't used. The city is an axis-aligned grid, and a navmesh would need rebuilding as buildings fall. Instead:
+  - People walk sidewalk rings around each block and cross at corners, waiting at the kerb unless parallel traffic has green.
+  - Fleeing people steer freely and slide along building footprints.
+  - Local avoidance is a spatial hash with separation (no stacking).
+  - People ride up onto rubble piles.
+  - Indoors, occupants move within their floor and run for the building core, then leave down the stairs once out of view. There is no stairwell navigation yet.
+- **Ambient life:** walking, standing on the phone, sitting on benches and in bus shelters, standing at shop fronts, waiting at crosswalks. Benches and shelters are new instanced street props (`src/world/streetProps.ts`). "Entering a building" only happens out of view, because there are no door meshes to walk through.
+- **Panic (§9.4):**
+  - Events (punches, slams, blasts, collapses, sonic booms, glass, heat cuts, explosions, deaths) alarm people within a radius scaled to the event, with sound delay plus reaction time.
+  - They startle, point or freeze, then flee (most), hide and cower, or film from a distance (if far enough).
+  - Fleeing people alarm others nearby, so panic ripples outward. Crowded sprinters sometimes trip, fall and get up.
+  - Once the hero has been violent, people within 45 m run from him.
+- **Damage and death (M5 scope; full gore is M6):**
+  - People take blast, punch, debris, car, heat, freeze, crush, fall, sonic and Nova damage.
+  - Below lethal they're knocked down, then limp, crawl or sit waving for help. Lethal hits throw them tumbling, and they land as corpses. Smaller lethal hits play a death fall.
+  - Corpses persist; past 400, the oldest off-screen ones go (§9.5).
+  - Heat vision chars them black; freeze breath makes ice statues that shatter (removed with frost mist) when struck.
+  - The Nova core removes people outright (the ash burst is M6); the blast zone flings them burning.
+  - Punching a person launches them.
+  - **Casualties fill the Nova meter** (`nova.casualtyDollars`, $150k each; M8 left this for M5).
+  - A **casualty counter** is on the HUD (`npc.showCasualties`; Appendix B lists it as the user's call).
+- **Interior occupants:** a breached unit gets 0–3 people (one more in shops) along with its furniture. Technically that's spawning people in view; I treated it as revealing a room that was always occupied (the window shader already showed occupied rooms). Occupants hide or run for the stairs. They fall when their floor goes and can be blown out by blasts. Calm occupants leave with their unit when it's cleared.
+- **Traffic (§7.10):**
+  - The lane graph comes from the block grid: inside streets have 2 lanes each way, perimeter streets 1, right-hand traffic.
+  - Cars follow lanes with an intelligent-driver model, stop at red and amber lights, don't enter blocked junctions, and turn on Bézier arcs. They brake for the hero, people, wrecks and rubble.
+  - Traffic lights from the transport pack stand on every signalled corner, showing live state.
+  - 120 parked cars line the kerbs. 70 drivers are recycled out of view around the hero.
+  - **Panic driving:** 35% abandon the car (the driver gets out and runs), the rest drive recklessly. Reckless drivers go 1.8× the limit, ignore lights, brake late, don't stop for people, and rear-end whatever's ahead, so crashes and pileups happen. Police cars and ambulances flash their beacons when alarmed.
+  - Response units (SWAT, Humvees, tanks...) are still M7/M9.
+- **Vehicle physics and damage:**
+  - Undisturbed vehicles are kinematic colliders in their own collision group. The hero's controller, ground probes and camera ignore that group, so cars never stop or wedge him: flying into one crumples and launches it, and walking into one shoves it. Debris, beams and punches still hit cars.
+  - Anything that knocks a car loose makes it a dynamic body. That includes punches, blasts, crashes, explosions and being grabbed (**cars and buses can be grabbed and thrown** like debris, and they smash into buildings).
+  - Damage dents the body: vertex crumple on the car's own wreck mesh, from a pool of 60 created up front. Glass breaks. Heat vision lights it, and the fuel explodes, throwing nearby cars and people and chaining to other cars, leaving a burning blackened wreck. Freeze breath frosts cars until they're brittle, and a hit then shatters them into chunks that stay as rubble.
+  - **Not done:** doors, hoods and bumpers detaching. The pack's cars are single meshes with no separate panels.
+- **Not in this milestone:** road lane markings and crosswalk stripes (the asphalt is still plain), and the hero model. §3 wants the hero through the same pipeline, but the placeholder hero carries every power pose, so swapping in the male base body is its own job.

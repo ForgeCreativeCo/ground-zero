@@ -2,8 +2,10 @@ import type { MetaMap } from './meta';
 
 /** Nova blast (DESIGN.md §6.6), the nuclear power. Distances in metres, times in seconds. */
 export const nova = {
-  /** Property damage (dollars) that fills the charge meter from empty. Casualties add later (M5). */
+  /** Property damage (dollars) that fills the charge meter from empty. */
   fillDollars: 60_000_000,
+  /** Each casualty adds this much (dollars-equivalent) to the meter. */
+  casualtyDollars: 150_000,
   /** Only fire with a full meter (off = debug: fire any time). */
   requireFullMeter: true,
   /** Seconds of holding R before it goes off; letting go earlier cancels it. */
@@ -53,6 +55,7 @@ export const nova = {
 
 export const novaMeta: MetaMap = {
   'nova.fillDollars': { min: 100_000, max: 2_000_000_000, step: 100_000 },
+  'nova.casualtyDollars': { min: 0, max: 10_000_000, step: 10_000 },
   'nova.windupTime': { min: 0.2, max: 10, step: 0.1 },
   'nova.radius': { min: 20, max: 1500, step: 5 },
   'nova.waveSpeed': { min: 20, max: 2000, step: 5 },

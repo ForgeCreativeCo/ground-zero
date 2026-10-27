@@ -75,6 +75,14 @@ export class Nova {
       if (this.phase === 'wave' || delta <= 0) return;
       this.meter = Math.min(1, this.meter + delta / Math.max(1, config.nova.fillDollars));
     });
+    // Casualties count too (M5): each death is worth casualtyDollars of carnage.
+    events.on('npc:death', () => {
+      if (this.phase === 'wave') return;
+      this.meter = Math.min(
+        1,
+        this.meter + config.nova.casualtyDollars / Math.max(1, config.nova.fillDollars),
+      );
+    });
   }
 
   /** Call once per rendered frame: resets the per-frame work budget. */

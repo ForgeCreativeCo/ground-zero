@@ -86,6 +86,28 @@ export interface GameEvents {
     vz: number;
   };
   'player:tunnelCrash': { building: number; x: number; y: number; z: number };
+  /** Humans (M5): a person died (cause: blast, hero, heat, freeze, crush, fall, car...). */
+  'npc:death': { x: number; y: number; z: number; cause: string };
+  /** A frozen person shattered. */
+  'npc:shatter': { x: number; y: number; z: number };
+  /** A thrown body hit the ground. */
+  'npc:land': { x: number; y: number; z: number; speed: number };
+  /** Interior units furnished / cleared (occupants follow them). */
+  'interior:unitSpawned': {
+    unit: number;
+    x0: number;
+    x1: number;
+    y0: number;
+    z0: number;
+    z1: number;
+    retail: boolean;
+  };
+  'interior:unitDespawned': { unit: number };
+  /** Vehicles (M5). */
+  'vehicle:crash': { x: number; y: number; z: number; speed: number };
+  'vehicle:explode': { x: number; y: number; z: number; radius: number };
+  'vehicle:ignite': { x: number; y: number; z: number };
+  'vehicle:shatter': { x: number; y: number; z: number };
 }
 
 export type PlayerState = 'grounded' | 'airborne' | 'flying';
